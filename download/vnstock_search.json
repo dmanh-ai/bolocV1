@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/thinh-vu/vnstock",
+    "name": "thinh-vu/vnstock: A beginner-friendly yet powerful Python",
+    "snippet": "Install or upgrade to the latest version of Vnstock via pip: pip install -U vnstock . You can also install the experimental release from GitHub using the command ... Read more",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pypi.org/project/vnstock/0.1.1",
+    "name": "vnstock 0.1.1",
+    "snippet": "To get this package working, you will need to install it via pip (with a Python 3.7 version or higher) on the terminal by typing: $ pip install vnstock . Read more",
+    "host_name": "pypi.org",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/MaoBui2907/vnstock-mcp-server",
+    "name": "MaoBui2907/vnstock-mcp-server",
+    "snippet": "This MCP server is built on top of the vnstock library - a powerful Python toolkit for Vietnamese stock market analysis created by Thinh Vu. vnstock ... Read more",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://vnstock-data-python.readthedocs.io/en/latest",
+    "name": "Getting started - Vietnam Stock Data",
+    "snippet": "Welcome to Vietnam Stock Data Package. This package bringing an easy way to access to Vietnam Stock data. Installation. Easy install via pip . Read more",
+    "host_name": "vnstock-data-python.readthedocs.io",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/vietfin/vietfin",
+    "name": "vietfin/vietfin: python library to fetch Vietnam stock market",
+    "snippet": "VietFin is available on PyPI. To use the package : Install VietFin in your project's virtual environment. $ pip install vietfin. Read more",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/thangnh1/Vnstock-Data-GCP",
+    "name": "thangnh1/Vnstock-Data-GCP: Extract stock data from API,",
+    "snippet": "Setup pip3 : sudo apt upgrade & sudo apt-get install python-pip3 . Install libs : pip3 install -r requirements.txt. If the library installation has a version ... Read more",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/vnstock-hq/gemini_ai",
+    "name": "vnstock-hq/gemini_ai: A Python package",
+    "snippet": "Installation. To install gemini_ai and its dependencies, use: pip install gemini_ai . This will install the required packages, including google-generativeai ... Read more",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pypi.org/project/vnstock/0.0.2",
+    "name": "vnstock 0.0.2",
+    "snippet": "Feb 26, 2022 — vnstock is a Python package to retrieve the Vietnam stock market data from TCBS. vnstock allows the user to download historical, intraday stock ... Read more",
+    "host_name": "pypi.org",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.kaggle.com/code/vuthinh/vnstock-extract-vietnam-stock-market-data",
+    "name": "vnstock - Extract Vietnam Stock Market Data",
+    "snippet": "vnstock is a user-friendly Python library tailored for convenient and complimentary acquisition of Vietnamese stock market data. Leveraging dependable data ... Read more",
+    "host_name": "www.kaggle.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/thangnh1/VNStock",
+    "name": "thangnh1/VNStock: Extract stock market data, then",
+    "snippet": "Config env, connection · Install packages · get_stock_data.py to retrieve the entire stock market data, and save the results to the file data. Read more",
+    "host_name": "github.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]
