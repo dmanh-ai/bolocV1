@@ -254,35 +254,61 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
  * Quality Tier based on fundamentals.
  * NOTE: ratios from CSV are in DECIMAL form (0.15 = 15%).
  * We convert to percentage for comparison.
+ *
+ * Data coverage is limited (many major stocks missing from company_ratios.csv,
+ * some fields are 0/undefined). Scoring compensates with:
+ * - PE/EPS-based quality signals
+ * - Gross margin as fallback for net margin
+ * - Lower thresholds (PRIME>=5, VALID>=3)
+ * - Stocks without any ratio data default to VALID (they are in our
+ *   universe because they have price history = at least tracked stocks)
  */
 function calcQTier(ratios: CompanyRatios | undefined): QTier {
-  if (!ratios) return "WATCH";
+  // Stocks without fundamental data but with price CSV → assume VALID
+  // (they are in our universe = large-cap tracked stocks)
+  if (!ratios) return "VALID";
 
-  // Convert decimal ratios to percentage where needed
+  // Convert decimal ratios to percentage
   const roe = ratios.roe !== undefined ? ratios.roe * 100 : undefined;
   const npg = ratios.net_profit_growth !== undefined ? ratios.net_profit_growth * 100 : undefined;
   const rg = ratios.revenue_growth !== undefined ? ratios.revenue_growth * 100 : undefined;
   const npm = ratios.net_profit_margin !== undefined ? ratios.net_profit_margin * 100 : undefined;
-  // current_ratio and de are already ratios (1.2x, 0.5x), no conversion needed
+  const gm = ratios.gross_margin !== undefined ? ratios.gross_margin * 100 : undefined;
   const cr = ratios.current_ratio;
   const de = ratios.de;
+  const pe = ratios.pe;
+  const eps = ratios.eps;
 
   let score = 0;
+
+  // ROE (max 3) - primary quality indicator
   if (roe !== undefined && roe >= 15) score += 3;
   else if (roe !== undefined && roe >= 10) score += 2;
   else if (roe !== undefined && roe >= 5) score += 1;
 
+  // Growth (max 3)
   if (npg !== undefined && npg > 10) score += 2;
   else if (npg !== undefined && npg > 0) score += 1;
+  if (rg !== undefined && rg > 5) score += 1;
 
-  if (rg !== undefined && rg > 10) score += 1;
+  // Valuation (max 2) - PE-based quality
+  if (pe !== undefined && pe > 0 && pe < 15) score += 2;
+  else if (pe !== undefined && pe > 0 && pe < 25) score += 1;
 
+  // EPS quality (max 1)
+  if (eps !== undefined && eps > 2000) score += 1;
+
+  // Margins (max 1) - use gross margin as fallback
+  if (npm !== undefined && npm > 8) score += 1;
+  else if (gm !== undefined && gm > 15) score += 1;
+
+  // Solvency (max 2)
   if (cr !== undefined && cr >= 1.2) score += 1;
   if (de !== undefined && de < 2) score += 1;
-  if (npm !== undefined && npm > 10) score += 1;
 
-  if (score >= 7) return "PRIME";
-  if (score >= 4) return "VALID";
+  // Max possible: 3 + 3 + 2 + 1 + 1 + 2 = 12
+  if (score >= 5) return "PRIME";
+  if (score >= 2) return "VALID";
   return "WATCH";
 }
 
@@ -510,12 +536,15 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
           // Get latest price from price data if available
           const latestPrice = priceData[priceData.length - 1]?.close ?? stock.closePrice;
           const prevPrice = priceData.length >= 2 ? priceData[priceData.length - 2].close : latestPrice;
-          const changePct = prevPrice > 0 ? ((latestPrice - prevPrice) / prevPrice) * 100 : stock.changePct;
+          // stock.changePct from trading_stats is in decimal (0.02 = 2%), multiply by 100 for fallback
+          const changePct = prevPrice > 0 ? ((latestPrice - prevPrice) / prevPrice) * 100 : stock.changePct * 100;
 
           // Compute GTGD from recent price data (5-day avg)
+          // Stock CSV prices are in thousands VND → close * volume = value in 1000 VND
+          // To get tỷ VND: divide by 1e6 (1000 VND * 1e6 = 1e9 VND = 1 tỷ)
           const recentVols = priceData.slice(-5);
           const avgVal = recentVols.reduce((s, d) => s + d.close * d.volume, 0) / recentVols.length;
-          const gtgd = parseFloat((avgVal / 1e9).toFixed(1));
+          const gtgd = parseFloat((avgVal / 1e6).toFixed(1));
 
           // TO calculations
           const tpaths = calcTrendPath(priceData);
