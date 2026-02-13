@@ -11,19 +11,21 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  getStockList,
+  getTopGainers,
+  getTopLosers,
+  type TopMover,
+} from "@/lib/vnstock-api";
 
 async function fetchMarketBreadth() {
-  const res = await fetch("/api/stocks?action=list");
-  const data = await res.json();
-  if (!data.success) return null;
-
-  const stocks = data.data || [];
+  const stocks = await getStockList();
   let advancing = 0;
   let declining = 0;
   let unchanged = 0;
   let totalVolume = 0;
 
-  stocks.forEach((s: { price_change_pct: number; total_volume: number }) => {
+  stocks.forEach((s) => {
     if (s.price_change_pct > 0) advancing++;
     else if (s.price_change_pct < 0) declining++;
     else unchanged++;
@@ -33,16 +35,6 @@ async function fetchMarketBreadth() {
   return { advancing, declining, unchanged, totalVolume, total: stocks.length };
 }
 
-async function fetchTopGainers() {
-  const res = await fetch("/api/stocks?action=top_gainers");
-  return res.json();
-}
-
-async function fetchTopLosers() {
-  const res = await fetch("/api/stocks?action=top_losers");
-  return res.json();
-}
-
 export function MarketOverview() {
   const { data: marketData, isLoading: loadingMarket } = useQuery({
     queryKey: ["market-breadth"],
@@ -50,20 +42,17 @@ export function MarketOverview() {
     refetchInterval: 60000,
   });
 
-  const { data: gainersData, isLoading: loadingGainers } = useQuery({
+  const { data: topGainers = [], isLoading: loadingGainers } = useQuery({
     queryKey: ["top-gainers-market"],
-    queryFn: fetchTopGainers,
+    queryFn: async () => (await getTopGainers()).slice(0, 5),
     refetchInterval: 60000,
   });
 
-  const { data: losersData, isLoading: loadingLosers } = useQuery({
+  const { data: topLosers = [], isLoading: loadingLosers } = useQuery({
     queryKey: ["top-losers-market"],
-    queryFn: fetchTopLosers,
+    queryFn: async () => (await getTopLosers()).slice(0, 5),
     refetchInterval: 60000,
   });
-
-  const topGainers = (gainersData?.data || []).slice(0, 5);
-  const topLosers = (losersData?.data || []).slice(0, 5);
 
   const isLoading = loadingMarket || loadingGainers || loadingLosers;
 
@@ -164,31 +153,25 @@ export function MarketOverview() {
               </div>
             ) : (
               <div className="space-y-2">
-                {topGainers.map(
-                  (stock: {
-                    symbol: string;
-                    close_price: number;
-                    percent_change: number;
-                  }) => (
-                    <div
-                      key={stock.symbol}
-                      className="flex items-center justify-between p-3 rounded-lg bg-green-500/5 hover:bg-green-500/10"
-                    >
-                      <div>
-                        <div className="font-medium">{stock.symbol}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {stock.close_price?.toLocaleString()} VND
-                        </div>
+                {topGainers.map((stock: TopMover) => (
+                  <div
+                    key={stock.symbol}
+                    className="flex items-center justify-between p-3 rounded-lg bg-green-500/5 hover:bg-green-500/10"
+                  >
+                    <div>
+                      <div className="font-medium">{stock.symbol}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {stock.close_price?.toLocaleString()} VND
                       </div>
-                      <Badge
-                        variant="outline"
-                        className="text-green-500 border-green-500/20"
-                      >
-                        +{stock.percent_change?.toFixed(2)}%
-                      </Badge>
                     </div>
-                  )
-                )}
+                    <Badge
+                      variant="outline"
+                      className="text-green-500 border-green-500/20"
+                    >
+                      +{stock.percent_change?.toFixed(2)}%
+                    </Badge>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
@@ -211,31 +194,25 @@ export function MarketOverview() {
               </div>
             ) : (
               <div className="space-y-2">
-                {topLosers.map(
-                  (stock: {
-                    symbol: string;
-                    close_price: number;
-                    percent_change: number;
-                  }) => (
-                    <div
-                      key={stock.symbol}
-                      className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 hover:bg-red-500/10"
-                    >
-                      <div>
-                        <div className="font-medium">{stock.symbol}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {stock.close_price?.toLocaleString()} VND
-                        </div>
+                {topLosers.map((stock: TopMover) => (
+                  <div
+                    key={stock.symbol}
+                    className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 hover:bg-red-500/10"
+                  >
+                    <div>
+                      <div className="font-medium">{stock.symbol}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {stock.close_price?.toLocaleString()} VND
                       </div>
-                      <Badge
-                        variant="outline"
-                        className="text-red-500 border-red-500/20"
-                      >
-                        {stock.percent_change?.toFixed(2)}%
-                      </Badge>
                     </div>
-                  )
-                )}
+                    <Badge
+                      variant="outline"
+                      className="text-red-500 border-red-500/20"
+                    >
+                      {stock.percent_change?.toFixed(2)}%
+                    </Badge>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>

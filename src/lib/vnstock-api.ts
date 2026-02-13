@@ -5,7 +5,6 @@
  */
 
 const BASE_URL =
-  process.env.VNSTOCK_DATA_URL ||
   "https://raw.githubusercontent.com/dmanh-ai/vnstock/main/data";
 
 // --------------- CSV Parser ---------------
@@ -46,7 +45,7 @@ async function fetchCSV(path: string): Promise<Record<string, string>[]> {
     return cached.data;
   }
 
-  const res = await fetch(url, { next: { revalidate: 300 } });
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Failed to fetch ${path}: ${res.status}`);
   }
