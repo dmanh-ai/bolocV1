@@ -1,774 +1,544 @@
 /**
- * Stock Analyzer - Comprehensive 3-pillar analysis
- * 1. Fundamental: Revenue, profit, margins, valuation, growth, solvency
- * 2. Technical: All indicators from vnstock (SMA, RSI, MACD, BB, volume, volatility)
- * 3. Macro: VN index trend, foreign flow, market breadth
+ * Stock Analyzer V5.3 - TO Best Setups + RS Best Setups
+ * Based on Technical Oscillator + Relative Strength methodology
+ *
+ * TO Tiers: Tier 1A (Ready), Tier 2A (Valid), S_MAJOR TREND,
+ *           Fresh Breakout, Quality Retest, Pipeline (BASE)
+ * RS Categories: SYNC+ACTIVE, D_LEAD+ACTIVE, M_LEAD+ACTIVE, PROBE Watch
+ *
+ * Metrics: STATE, TPATHS, MTF, QTIER, MIPH, MI, RANK, RS%, VECTOR, BUCKET, SCORE
  */
 
 import {
   getPriceHistory,
-  getCompanyRatios,
-  getStockList,
   getAllCompanyRatios,
-  getMarketBreadth,
+  getStockList,
   getIndexHistory,
-  getForeignFlow,
   type StockOHLCV,
   type CompanyRatios,
   type StockListItem,
-  type IndexData,
-  type ForeignFlow,
 } from "./vnstock-api";
 
-// --------------- Types ---------------
+// ==================== TYPES ====================
 
-export type Strategy = "investing" | "trading";
+export type TrendPath = "S_MAJOR" | "MAJOR" | "MINOR" | "WEAK";
+export type State = "BREAKOUT" | "CONFIRM" | "RETEST" | "TREND" | "BASE" | "WEAK";
+export type MTFSync = "SYNC" | "PARTIAL" | "WEAK";
+export type QTier = "PRIME" | "VALID" | "WATCH";
+export type MIPhase = "PEAK" | "HIGH" | "MID" | "LOW";
+export type RSState = "Leading" | "Improving" | "Neutral" | "Weakening" | "Declining";
+export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "NEUT";
+export type RSBucket = "PRIME" | "ELITE" | "CORE" | "QUALITY" | "WEAK";
 
-export interface Signal {
-  type: "fundamental" | "technical" | "macro";
-  signal: string;
-  detail: string;
-  impact: "positive" | "negative" | "neutral";
-}
-
-export interface TechnicalData {
-  current_price: number;
-  trend: string;
-  rsi: number;
-  ma20: number;
-  ma50: number;
-  ma200: number;
-  macd: number;
-  macd_signal: number;
-  macd_hist: number;
-  support: number;
-  resistance: number;
-  volatility: number;
-  volume_ratio: number;
-  bb_upper: number;
-  bb_lower: number;
-  daily_return: number;
-  price_vs_ma20_pct: number;
-  price_vs_ma50_pct: number;
-  price_vs_ma200_pct: number;
-}
-
-export interface FundamentalData {
-  pe?: number;
-  pb?: number;
-  ps?: number;
-  ev_per_ebitda?: number;
-  roe?: number;
-  roic?: number;
-  roa?: number;
-  eps?: number;
-  bvps?: number;
-  revenue?: number;
-  revenue_growth?: number;
-  net_profit?: number;
-  net_profit_growth?: number;
-  gross_margin?: number;
-  net_profit_margin?: number;
-  ebit_margin?: number;
-  current_ratio?: number;
-  quick_ratio?: number;
-  de?: number;
-  interest_coverage?: number;
-  dividend?: number;
-  market_cap?: number;
-}
-
-export interface MacroData {
-  vnindex_trend: string;
-  vnindex_rsi: number;
-  vnindex_change_pct: number;
-  market_advancing: number;
-  market_declining: number;
-  foreign_net_value: number;
-  market_sentiment: string;
-}
-
-export interface StockAnalysisResult {
+export interface TOStock {
   symbol: string;
-  score: number;
-  action: string;
-  confidence: string;
-  current_price: number;
-  support: number;
-  resistance: number;
-  signals: Signal[];
-  fundamental_score: number;
-  technical_score: number;
-  macro_score: number;
-  data: {
-    fundamental: FundamentalData;
-    technical: TechnicalData;
-    macro: MacroData;
-  };
+  price: number;
+  changePct: number;
+  gtgd: number; // trading value 5-day avg in tỷ VND
+  state: State;
+  tpaths: TrendPath;
+  mtf: MTFSync;
+  qtier: QTier;
+  miph: MIPhase;
+  mi: number; // 0-100
+  rank: number; // composite score
+  volRatio: number;
+  rqs: number; // retest quality score
 }
 
-export interface StrategyResult {
-  strategy: string;
-  strategy_name: string;
-  timeframe: string;
+export interface RSStock {
+  symbol: string;
+  price: number;
+  changePct: number;
+  gtgd: number;
+  rsState: RSState;
+  vector: RSVector;
+  bucket: RSBucket;
+  rsPct: number; // RS vs VN-Index %
+  score: number; // 0-100
+  isActive: boolean;
+}
+
+export type TOTier = "tier1a" | "tier2a" | "s_major_trend" | "fresh_breakout" | "quality_retest" | "pipeline";
+export type RSCategory = "sync_active" | "d_lead_active" | "m_lead_active" | "probe_watch";
+
+export interface TOTierConfig {
+  key: TOTier;
+  name: string;
   description: string;
-  total_analyzed: number;
-  total_qualified: number;
-  recommendations: StockAnalysisResult[];
-  generated_at: string;
+  filter: (s: TOStock) => boolean;
 }
 
-// --------------- Strategy Configurations ---------------
+export interface RSCategoryConfig {
+  key: RSCategory;
+  name: string;
+  description: string;
+  filter: (s: RSStock) => boolean;
+}
 
-const STRATEGY_CONFIGS: Record<
-  Strategy,
+export interface AnalysisResult {
+  totalStocks: number;
+  toStocks: TOStock[];
+  rsStocks: RSStock[];
+  toTiers: Record<TOTier, TOStock[]>;
+  rsCats: Record<RSCategory, RSStock[]>;
+  counts: {
+    prime: number;
+    valid: number;
+    tier1a: number;
+    tier2a: number;
+    active: number;
+    sync: number;
+    dLead: number;
+    mLead: number;
+  };
+  generatedAt: string;
+}
+
+// ==================== TIER/CATEGORY CONFIGS ====================
+
+export const TO_TIERS: TOTierConfig[] = [
   {
-    name: string;
-    timeframe: string;
-    description: string;
-    weights: { fundamental: number; technical: number; macro: number };
-    thresholds: {
-      pe_max?: number;
-      pb_max?: number;
-      roe_min?: number;
-      rsi_min?: number;
-      rsi_max?: number;
-      min_score: number;
-    };
-  }
-> = {
-  investing: {
-    name: "Đầu tư dài hạn",
-    timeframe: "6 tháng - 1 năm",
-    description: "Fundamentals mạnh, định giá hợp lý, tăng trưởng bền vững, vĩ mô thuận lợi",
-    weights: { fundamental: 0.50, technical: 0.25, macro: 0.25 },
-    thresholds: {
-      pe_max: 25,
-      pb_max: 4,
-      roe_min: 8,
-      min_score: 55,
-    },
+    key: "tier1a",
+    name: "Tier 1A - Ready",
+    description: "PRIME + Entry State + SYNC | Entry tối ưu",
+    filter: (s) => s.qtier === "PRIME" && (s.state === "RETEST" || s.state === "CONFIRM") && s.mtf === "SYNC",
   },
-  trading: {
-    name: "Trading ngắn hạn",
-    timeframe: "1 - 4 tuần",
-    description: "Xu hướng kỹ thuật mạnh, momentum tốt, thanh khoản cao",
-    weights: { fundamental: 0.15, technical: 0.65, macro: 0.20 },
-    thresholds: {
-      rsi_min: 25,
-      rsi_max: 75,
-      min_score: 50,
-    },
+  {
+    key: "tier2a",
+    name: "Tier 2A - Valid",
+    description: "VALID + Entry State + MTF≠WEAK | Entry được phép",
+    filter: (s) => s.qtier === "VALID" && (s.state === "RETEST" || s.state === "CONFIRM" || s.state === "BREAKOUT") && s.mtf !== "WEAK",
   },
-};
+  {
+    key: "s_major_trend",
+    name: "S_MAJOR TREND",
+    description: "S_MAJOR + TREND + MI HIGH/PEAK | Giữ vị thế",
+    filter: (s) => s.tpaths === "S_MAJOR" && s.state === "TREND" && (s.miph === "HIGH" || s.miph === "PEAK"),
+  },
+  {
+    key: "fresh_breakout",
+    name: "Fresh Breakout",
+    description: "BREAKOUT + QT≥VALID + VolR≥1.5 | Mới phá vỡ",
+    filter: (s) => s.state === "BREAKOUT" && s.qtier !== "WATCH" && s.volRatio >= 1.5,
+  },
+  {
+    key: "quality_retest",
+    name: "Quality Retest",
+    description: "RETEST + S_MAJOR + RQS≥60 | Pullback chất lượng",
+    filter: (s) => s.state === "RETEST" && s.tpaths === "S_MAJOR" && s.rqs >= 60,
+  },
+  {
+    key: "pipeline",
+    name: "Pipeline (BASE)",
+    description: "BASE + QT≥VALID + MI MID+ | Theo dõi",
+    filter: (s) => s.state === "BASE" && s.qtier !== "WATCH" && (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
+  },
+];
 
-// --------------- Macro Analysis ---------------
+export const RS_CATEGORIES: RSCategoryConfig[] = [
+  {
+    key: "sync_active",
+    name: "SYNC + ACTIVE",
+    description: "RS SYNC + ACTIVE | 3 TF đồng thuận",
+    filter: (s) => s.vector === "SYNC" && s.isActive,
+  },
+  {
+    key: "d_lead_active",
+    name: "D_LEAD + ACTIVE",
+    description: "RS D_LEAD + ACTIVE | Daily dẫn đầu",
+    filter: (s) => s.vector === "D_LEAD" && s.isActive,
+  },
+  {
+    key: "m_lead_active",
+    name: "M_LEAD + ACTIVE",
+    description: "RS M_LEAD + ACTIVE | Monthly dẫn",
+    filter: (s) => s.vector === "M_LEAD" && s.isActive,
+  },
+  {
+    key: "probe_watch",
+    name: "PROBE Watch",
+    description: "Improving + PROBE + Score≥50 | Sắp breakout RS",
+    filter: (s) => s.rsState === "Improving" && s.score >= 50,
+  },
+];
 
-let cachedMacro: { data: MacroData; ts: number } | null = null;
-const MACRO_CACHE_TTL = 10 * 60 * 1000;
+// ==================== CALCULATIONS ====================
 
-async function analyzeMacro(): Promise<{
-  score: number;
-  data: MacroData;
-  signals: Signal[];
-}> {
-  if (cachedMacro && Date.now() - cachedMacro.ts < MACRO_CACHE_TTL) {
-    return { score: 50, data: cachedMacro.data, signals: [] };
-  }
-
-  const signals: Signal[] = [];
-  let score = 50;
-
-  let vnindexTrend = "N/A";
-  let vnindexRsi = 50;
-  let vnindexChangePct = 0;
-  let advancing = 0;
-  let declining = 0;
-  let foreignNetValue = 0;
-
-  // VN-Index analysis
-  try {
-    const vnindex = await getIndexHistory("VNINDEX");
-    if (vnindex.length >= 20) {
-      const latest = vnindex[vnindex.length - 1];
-      const prev = vnindex[vnindex.length - 2];
-      vnindexRsi = latest.rsi_14 ?? 50;
-      vnindexChangePct = latest.daily_return ?? 0;
-      const sma20 = latest.sma_20 ?? latest.close;
-
-      if (latest.close > sma20) {
-        vnindexTrend = "Uptrend";
-        score += 10;
-        signals.push({ type: "macro", signal: "VN-Index trên MA20", detail: `VNI = ${latest.close.toFixed(0)}`, impact: "positive" });
-      } else {
-        vnindexTrend = "Downtrend";
-        score -= 10;
-        signals.push({ type: "macro", signal: "VN-Index dưới MA20", detail: `VNI = ${latest.close.toFixed(0)}`, impact: "negative" });
-      }
-
-      if (vnindexRsi < 30) {
-        score += 5;
-        signals.push({ type: "macro", signal: "VN-Index quá bán", detail: `RSI = ${vnindexRsi.toFixed(0)}`, impact: "positive" });
-      } else if (vnindexRsi > 70) {
-        score -= 5;
-        signals.push({ type: "macro", signal: "VN-Index quá mua", detail: `RSI = ${vnindexRsi.toFixed(0)}`, impact: "negative" });
-      }
-
-      // Check 5-day momentum
-      if (vnindex.length >= 6) {
-        const fiveDayAgo = vnindex[vnindex.length - 6];
-        const fiveDayReturn = ((latest.close - fiveDayAgo.close) / fiveDayAgo.close) * 100;
-        if (fiveDayReturn > 2) {
-          score += 5;
-          signals.push({ type: "macro", signal: "Thị trường momentum tốt", detail: `+${fiveDayReturn.toFixed(1)}% 5 phiên`, impact: "positive" });
-        } else if (fiveDayReturn < -2) {
-          score -= 5;
-          signals.push({ type: "macro", signal: "Thị trường suy yếu", detail: `${fiveDayReturn.toFixed(1)}% 5 phiên`, impact: "negative" });
-        }
-      }
-    }
-  } catch { /* skip */ }
-
-  // Market breadth
-  try {
-    const breadth = await getMarketBreadth();
-    breadth.forEach((b) => {
-      advancing += b.advancing;
-      declining += b.declining;
-    });
-    if (advancing > 0 || declining > 0) {
-      const ratio = advancing / (advancing + declining);
-      if (ratio > 0.6) {
-        score += 8;
-        signals.push({ type: "macro", signal: "Breadth tích cực", detail: `${advancing} tăng / ${declining} giảm`, impact: "positive" });
-      } else if (ratio < 0.4) {
-        score -= 8;
-        signals.push({ type: "macro", signal: "Breadth tiêu cực", detail: `${advancing} tăng / ${declining} giảm`, impact: "negative" });
-      }
-    }
-  } catch { /* skip */ }
-
-  // Foreign flow
-  try {
-    const flows = await getForeignFlow();
-    foreignNetValue = flows.reduce((sum, f) => sum + f.foreign_net_value, 0);
-    if (foreignNetValue > 0) {
-      score += 5;
-      signals.push({ type: "macro", signal: "Khối ngoại mua ròng", detail: `${(foreignNetValue / 1e9).toFixed(1)} tỷ`, impact: "positive" });
-    } else if (foreignNetValue < -50e9) {
-      score -= 5;
-      signals.push({ type: "macro", signal: "Khối ngoại bán ròng mạnh", detail: `${(foreignNetValue / 1e9).toFixed(1)} tỷ`, impact: "negative" });
-    }
-  } catch { /* skip */ }
-
-  let sentiment = "Trung lập";
-  if (score >= 60) sentiment = "Tích cực";
-  else if (score >= 70) sentiment = "Rất tích cực";
-  else if (score <= 40) sentiment = "Tiêu cực";
-  else if (score <= 30) sentiment = "Rất tiêu cực";
-
-  const macroData: MacroData = {
-    vnindex_trend: vnindexTrend,
-    vnindex_rsi: vnindexRsi,
-    vnindex_change_pct: vnindexChangePct,
-    market_advancing: advancing,
-    market_declining: declining,
-    foreign_net_value: foreignNetValue,
-    market_sentiment: sentiment,
-  };
-
-  cachedMacro = { data: macroData, ts: Date.now() };
-
-  return {
-    score: Math.max(0, Math.min(100, score)),
-    data: macroData,
-    signals,
-  };
+function calcTrendPath(data: StockOHLCV[]): TrendPath {
+  if (data.length < 5) return "WEAK";
+  const l = data[data.length - 1];
+  const c = l.close;
+  const m20 = l.sma_20 ?? c;
+  const m50 = l.sma_50 ?? c;
+  const m200 = l.sma_200 ?? c;
+  if (c > m20 && m20 > m50 && m50 > m200) return "S_MAJOR";
+  if (c > m50 && m50 > m200) return "MAJOR";
+  if (c > m200) return "MINOR";
+  return "WEAK";
 }
 
-// --------------- Technical Analysis ---------------
+function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: number } {
+  if (data.length < 20) return { state: "WEAK", volRatio: 1, rqs: 0 };
 
-function analyzeTechnicals(priceData: StockOHLCV[]): {
-  score: number;
-  data: TechnicalData;
-  signals: Signal[];
-} {
-  if (priceData.length < 5) {
-    return {
-      score: 50,
-      data: {
-        current_price: 0, trend: "N/A", rsi: 50,
-        ma20: 0, ma50: 0, ma200: 0,
-        macd: 0, macd_signal: 0, macd_hist: 0,
-        support: 0, resistance: 0,
-        volatility: 0, volume_ratio: 1,
-        bb_upper: 0, bb_lower: 0,
-        daily_return: 0,
-        price_vs_ma20_pct: 0, price_vs_ma50_pct: 0, price_vs_ma200_pct: 0,
-      },
-      signals: [],
-    };
+  const l = data[data.length - 1];
+  const prev = data[data.length - 2];
+  const c = l.close;
+  const m20 = l.sma_20 ?? c;
+  const m50 = l.sma_50 ?? c;
+  const bbU = l.bb_upper ?? c * 1.02;
+  const bbL = l.bb_lower ?? c * 0.98;
+
+  // Volume ratio (5-day avg vs 20-day avg)
+  const vol5 = data.slice(-5).reduce((s, d) => s + d.volume, 0) / 5;
+  const vol20 = data.slice(-20).reduce((s, d) => s + d.volume, 0) / 20;
+  const volRatio = vol20 > 0 ? vol5 / vol20 : 1;
+
+  // 60-day high/low
+  const recent60 = data.slice(-60);
+  const high60 = Math.max(...recent60.map((d) => d.high));
+  const high20 = Math.max(...data.slice(-20).map((d) => d.high));
+
+  // BB width for squeeze detection
+  const bbWidth = bbU > 0 ? (bbU - bbL) / ((bbU + bbL) / 2) : 0.1;
+
+  // Retest Quality Score (RQS)
+  let rqs = 50;
+  if (c >= m20 * 0.97 && c <= m20 * 1.03) rqs += 15; // near MA20
+  if (volRatio < 1.2) rqs += 10; // low volume pullback = healthy
+  if (l.rsi_14 && l.rsi_14 >= 40 && l.rsi_14 <= 55) rqs += 15; // RSI in good zone
+  if (data.length >= 5) {
+    const fiveDaysAgo = data[data.length - 5];
+    if (c < fiveDaysAgo.close && c > m50) rqs += 10; // pulled back but above MA50
   }
+  rqs = Math.min(100, Math.max(0, rqs));
 
-  const latest = priceData[priceData.length - 1];
-  const prev = priceData[priceData.length - 2];
-  const price = latest.close;
-  const signals: Signal[] = [];
-  let score = 50;
-
-  const ma20 = latest.sma_20 ?? price;
-  const ma50 = latest.sma_50 ?? price;
-  const ma200 = latest.sma_200 ?? price;
-  const rsi = latest.rsi_14 ?? 50;
-  const macd = latest.macd ?? 0;
-  const macdSignal = latest.macd_signal ?? 0;
-  const macdHist = latest.macd_hist ?? 0;
-  const volatility = latest.volatility_20d ?? 0;
-  const bbUpper = latest.bb_upper ?? price * 1.02;
-  const bbLower = latest.bb_lower ?? price * 0.98;
-  const dailyReturn = latest.daily_return ?? 0;
-
-  const pctMa20 = ma20 > 0 ? ((price - ma20) / ma20) * 100 : 0;
-  const pctMa50 = ma50 > 0 ? ((price - ma50) / ma50) * 100 : 0;
-  const pctMa200 = ma200 > 0 ? ((price - ma200) / ma200) * 100 : 0;
-
-  // --- Trend (MA alignment) ---
-  let trend = "Sideway";
-  if (price > ma20 && ma20 > ma50) {
-    trend = "Uptrend";
-    score += 10;
-    signals.push({ type: "technical", signal: "Xu hướng tăng", detail: "Giá > MA20 > MA50", impact: "positive" });
-  } else if (price < ma20 && ma20 < ma50) {
-    trend = "Downtrend";
-    score -= 10;
-    signals.push({ type: "technical", signal: "Xu hướng giảm", detail: "Giá < MA20 < MA50", impact: "negative" });
+  // State detection
+  if (c > high60 * 0.99 && volRatio >= 1.5) {
+    return { state: "BREAKOUT", volRatio, rqs };
   }
-
-  // Golden / Death Cross
-  if (ma50 > ma200 && price > ma50) {
-    score += 5;
-    signals.push({ type: "technical", signal: "Golden Cross", detail: "MA50 > MA200", impact: "positive" });
-  } else if (ma50 < ma200 && price < ma50) {
-    score -= 5;
-    signals.push({ type: "technical", signal: "Death Cross", detail: "MA50 < MA200", impact: "negative" });
+  if (c > high20 * 0.99 && volRatio >= 1.2 && c > m20) {
+    return { state: "CONFIRM", volRatio, rqs };
   }
-
-  // Price vs MA200 (long-term trend)
-  if (price > ma200) score += 3;
-  else score -= 3;
-
-  // --- RSI ---
-  if (rsi < 30) {
-    score += 8;
-    signals.push({ type: "technical", signal: "Quá bán (RSI < 30)", detail: `RSI = ${rsi.toFixed(1)}`, impact: "positive" });
-  } else if (rsi > 70) {
-    score -= 8;
-    signals.push({ type: "technical", signal: "Quá mua (RSI > 70)", detail: `RSI = ${rsi.toFixed(1)}`, impact: "negative" });
-  } else if (rsi >= 40 && rsi <= 60) {
-    score += 2;
+  // Retest: pulled back toward MA20 or MA50
+  if (c >= m20 * 0.95 && c <= m20 * 1.02 && prev.close > m20 * 1.02 && c > m50) {
+    return { state: "RETEST", volRatio, rqs };
   }
-
-  // RSI divergence check (simple)
-  if (priceData.length >= 10) {
-    const tenAgo = priceData[priceData.length - 10];
-    const priceDown = price < tenAgo.close;
-    const rsiUp = rsi > (tenAgo.rsi_14 ?? 50);
-    if (priceDown && rsiUp) {
-      score += 5;
-      signals.push({ type: "technical", signal: "Phân kỳ RSI dương", detail: "Giá giảm nhưng RSI tăng", impact: "positive" });
+  if (c > m20 && m20 > m50) {
+    // Check if MA20 is rising
+    const m20_5ago = data[data.length - 6]?.sma_20 ?? m20;
+    if (m20 > m20_5ago) {
+      return { state: "TREND", volRatio, rqs };
     }
   }
-
-  // --- MACD ---
-  if (macd > macdSignal && macd > 0) {
-    score += 5;
-    signals.push({ type: "technical", signal: "MACD bullish", detail: "MACD trên tín hiệu", impact: "positive" });
-  } else if (macd < macdSignal && macd < 0) {
-    score -= 5;
-    signals.push({ type: "technical", signal: "MACD bearish", detail: "MACD dưới tín hiệu", impact: "negative" });
+  if (bbWidth < 0.06 && c > m50 * 0.97) {
+    return { state: "BASE", volRatio, rqs };
   }
 
-  // MACD crossover
-  const prevMacd = prev.macd ?? 0;
-  const prevSig = prev.macd_signal ?? 0;
-  if (prevMacd <= prevSig && macd > macdSignal) {
-    score += 7;
-    signals.push({ type: "technical", signal: "MACD cắt lên", detail: "Tín hiệu mua", impact: "positive" });
-  } else if (prevMacd >= prevSig && macd < macdSignal) {
-    score -= 5;
-    signals.push({ type: "technical", signal: "MACD cắt xuống", detail: "Tín hiệu bán", impact: "negative" });
-  }
+  return { state: "WEAK", volRatio, rqs };
+}
 
-  // MACD Histogram momentum
+function calcMTF(data: StockOHLCV[]): MTFSync {
+  if (data.length < 5) return "WEAK";
+  const l = data[data.length - 1];
+  const c = l.close;
+  const short = c > (l.sma_20 ?? c); // daily
+  const med = c > (l.sma_50 ?? c); // weekly equivalent
+  const long = c > (l.sma_200 ?? c); // monthly equivalent
+  if (short && med && long) return "SYNC";
+  if ((short && med) || (med && long)) return "PARTIAL";
+  return "WEAK";
+}
+
+function calcQTier(ratios: CompanyRatios | undefined): QTier {
+  if (!ratios) return "WATCH";
+  const { roe, net_profit_growth, revenue_growth, current_ratio, de, net_profit_margin } = ratios;
+  let score = 0;
+  if (roe !== undefined && roe >= 15) score += 3;
+  else if (roe !== undefined && roe >= 10) score += 2;
+  else if (roe !== undefined && roe >= 5) score += 1;
+  if (net_profit_growth !== undefined && net_profit_growth > 10) score += 2;
+  else if (net_profit_growth !== undefined && net_profit_growth > 0) score += 1;
+  if (revenue_growth !== undefined && revenue_growth > 10) score += 1;
+  if (current_ratio !== undefined && current_ratio >= 1.2) score += 1;
+  if (de !== undefined && de < 2) score += 1;
+  if (net_profit_margin !== undefined && net_profit_margin > 10) score += 1;
+
+  if (score >= 7) return "PRIME";
+  if (score >= 4) return "VALID";
+  return "WATCH";
+}
+
+function calcMIPhase(data: StockOHLCV[]): { miph: MIPhase; mi: number } {
+  if (data.length < 5) return { miph: "LOW", mi: 30 };
+  const l = data[data.length - 1];
+  const prev = data[data.length - 2];
+  const c = l.close;
+  const rsi = l.rsi_14 ?? 50;
+  const macd = l.macd ?? 0;
+  const macdSig = l.macd_signal ?? 0;
+  const macdHist = l.macd_hist ?? 0;
   const prevHist = prev.macd_hist ?? 0;
-  if (macdHist > 0 && macdHist > prevHist) {
-    score += 2;
-  } else if (macdHist < 0 && macdHist < prevHist) {
-    score -= 2;
-  }
+  const m20 = l.sma_20 ?? c;
+  const m50 = l.sma_50 ?? c;
+  const m200 = l.sma_200 ?? c;
 
-  // --- Bollinger Bands ---
-  if (price <= bbLower) {
-    score += 5;
-    signals.push({ type: "technical", signal: "Chạm BB dưới", detail: "Có thể phục hồi", impact: "positive" });
-  } else if (price >= bbUpper) {
-    score -= 3;
-    signals.push({ type: "technical", signal: "Chạm BB trên", detail: "Có thể điều chỉnh", impact: "negative" });
-  }
+  // MI calculation (0-100)
+  let mi = 0;
 
-  // BB width (squeeze)
-  const bbWidth = bbUpper > 0 ? (bbUpper - bbLower) / ((bbUpper + bbLower) / 2) : 0;
-  if (bbWidth < 0.05 && bbWidth > 0) {
-    signals.push({ type: "technical", signal: "BB Squeeze", detail: "Biên độ hẹp, sắp breakout", impact: "neutral" });
-  }
+  // RSI component (0-25)
+  if (rsi >= 50) mi += Math.min(25, (rsi - 30) * 0.625);
+  else mi += Math.max(0, (rsi - 20) * 0.5);
 
-  // --- Volume ---
-  const recentVolumes = priceData.slice(-20).map((d) => d.volume);
-  const avgVolume = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
-  const volumeRatio = avgVolume > 0 ? latest.volume / avgVolume : 1;
+  // MACD component (0-25)
+  if (macd > macdSig) mi += 10;
+  if (macd > 0) mi += 5;
+  if (macdHist > 0 && macdHist > prevHist) mi += 10;
+  else if (macdHist > 0) mi += 5;
 
-  if (volumeRatio > 2 && price > prev.close) {
-    score += 7;
-    signals.push({ type: "technical", signal: "Volume đột biến + giá tăng", detail: `${volumeRatio.toFixed(1)}x trung bình`, impact: "positive" });
-  } else if (volumeRatio > 1.5 && price > prev.close) {
-    score += 4;
-  } else if (volumeRatio > 2 && price < prev.close) {
-    score -= 5;
-    signals.push({ type: "technical", signal: "Volume đột biến + giá giảm", detail: "Áp lực bán mạnh", impact: "negative" });
-  }
+  // Trend component (0-25)
+  if (c > m20) mi += 8;
+  if (m20 > m50) mi += 8;
+  if (m50 > m200) mi += 9;
 
-  // --- Volatility ---
-  if (volatility > 0.03) {
-    signals.push({ type: "technical", signal: "Biến động cao", detail: `Vol 20d = ${(volatility * 100).toFixed(1)}%`, impact: "neutral" });
-  }
+  // Volume & momentum component (0-25)
+  const vol5 = data.slice(-5).reduce((s, d) => s + d.volume, 0) / 5;
+  const vol20 = data.slice(-20).reduce((s, d) => s + d.volume, 0) / 20;
+  const vr = vol20 > 0 ? vol5 / vol20 : 1;
+  if (vr > 1.5 && c > prev.close) mi += 15;
+  else if (vr > 1.0 && c > prev.close) mi += 10;
+  else if (c > prev.close) mi += 5;
 
-  // --- Support / Resistance ---
-  const recent = priceData.slice(-60);
-  const lows = recent.map((d) => d.low);
-  const highs = recent.map((d) => d.high);
-  const support = Math.min(...lows);
-  const resistance = Math.max(...highs);
+  mi = Math.min(100, Math.max(0, Math.round(mi)));
 
-  if (price < support * 1.05 && price > support * 0.98) {
-    score += 5;
-    signals.push({ type: "technical", signal: "Gần vùng hỗ trợ", detail: `Hỗ trợ: ${support.toLocaleString()}`, impact: "positive" });
-  }
-  if (price > resistance * 0.95) {
-    signals.push({ type: "technical", signal: "Gần kháng cự", detail: `Kháng cự: ${resistance.toLocaleString()}`, impact: "neutral" });
-  }
+  let miph: MIPhase;
+  if (rsi >= 60 && macd > macdSig && c > m20) miph = "PEAK";
+  else if (rsi >= 50 && (macd > 0 || c > m20)) miph = "HIGH";
+  else if (rsi >= 40) miph = "MID";
+  else miph = "LOW";
 
-  return {
-    score: Math.max(0, Math.min(100, score)),
-    data: {
-      current_price: price, trend, rsi, ma20, ma50, ma200,
-      macd, macd_signal: macdSignal, macd_hist: macdHist,
-      support, resistance,
-      volatility: volatility * 100,
-      volume_ratio: parseFloat(volumeRatio.toFixed(2)),
-      bb_upper: bbUpper, bb_lower: bbLower,
-      daily_return: dailyReturn * 100,
-      price_vs_ma20_pct: parseFloat(pctMa20.toFixed(2)),
-      price_vs_ma50_pct: parseFloat(pctMa50.toFixed(2)),
-      price_vs_ma200_pct: parseFloat(pctMa200.toFixed(2)),
-    },
-    signals,
-  };
+  return { miph, mi };
 }
 
-// --------------- Fundamental Analysis ---------------
+function calcRank(to: Omit<TOStock, "rank">): number {
+  let rank = 0;
+  // Quality (0-500)
+  if (to.qtier === "PRIME") rank += 450;
+  else if (to.qtier === "VALID") rank += 300;
+  else rank += 100;
 
-function analyzeFundamentals(ratios: CompanyRatios): {
-  score: number;
-  data: FundamentalData;
-  signals: Signal[];
-} {
-  const signals: Signal[] = [];
+  // Technical (0-500)
+  rank += to.mi * 5; // mi 0-100 → 0-500
+
+  // Momentum bonus (0-500)
+  if (to.tpaths === "S_MAJOR") rank += 200;
+  else if (to.tpaths === "MAJOR") rank += 130;
+  else if (to.tpaths === "MINOR") rank += 60;
+  if (to.mtf === "SYNC") rank += 100;
+  else if (to.mtf === "PARTIAL") rank += 50;
+  if (to.state === "BREAKOUT") rank += 80;
+  else if (to.state === "CONFIRM") rank += 70;
+  else if (to.state === "TREND") rank += 50;
+  else if (to.state === "RETEST") rank += 60;
+
+  return Math.round(rank);
+}
+
+// RS calculations
+function calcRS(
+  stockData: StockOHLCV[],
+  vnindexData: StockOHLCV[]
+): { rsPct: number; rsState: RSState; vector: RSVector; score: number; isActive: boolean } {
+  if (stockData.length < 20 || vnindexData.length < 20) {
+    return { rsPct: 0, rsState: "Neutral", vector: "NEUT", score: 30, isActive: false };
+  }
+
+  const sLen = stockData.length;
+  const vLen = vnindexData.length;
+
+  // Calculate returns over different periods
+  const calcReturn = (data: StockOHLCV[], periods: number) => {
+    if (data.length < periods + 1) return 0;
+    const now = data[data.length - 1].close;
+    const then = data[data.length - 1 - periods].close;
+    return then > 0 ? ((now - then) / then) * 100 : 0;
+  };
+
+  const sr20 = calcReturn(stockData, 20);
+  const sr50 = calcReturn(stockData, Math.min(50, sLen - 1));
+  const sr200 = calcReturn(stockData, Math.min(200, sLen - 1));
+
+  const vr20 = calcReturn(vnindexData, 20);
+  const vr50 = calcReturn(vnindexData, Math.min(50, vLen - 1));
+  const vr200 = calcReturn(vnindexData, Math.min(200, vLen - 1));
+
+  const rs20 = sr20 - vr20;
+  const rs50 = sr50 - vr50;
+  const rs200 = sr200 - vr200;
+
+  // RS% is the weighted average
+  const rsPct = parseFloat((rs20 * 0.5 + rs50 * 0.3 + rs200 * 0.2).toFixed(2));
+
+  // RS trend (compare current rs20 with 5-day ago rs20)
+  const sr20_5ago = stockData.length >= 26 ? calcReturn(stockData.slice(0, -5), 20) : sr20;
+  const vr20_5ago = vnindexData.length >= 26 ? calcReturn(vnindexData.slice(0, -5), 20) : vr20;
+  const rs20_5ago = sr20_5ago - vr20_5ago;
+  const rsTrend = rs20 - rs20_5ago;
+
+  // RS State
+  let rsState: RSState;
+  if (rsPct > 3 && rsTrend > 0) rsState = "Leading";
+  else if (rsTrend > 0.5) rsState = "Improving";
+  else if (Math.abs(rsTrend) <= 0.5) rsState = "Neutral";
+  else if (rsTrend < -0.5 && rsPct > 0) rsState = "Weakening";
+  else rsState = "Declining";
+
+  // Vector
+  let vector: RSVector;
+  if (rs20 > 0 && rs50 > 0 && rs200 > 0) vector = "SYNC";
+  else if (rs20 > 2) vector = "D_LEAD";
+  else if (rs200 > 2) vector = "M_LEAD";
+  else vector = "NEUT";
+
+  // Score (0-100)
   let score = 50;
+  score += Math.min(20, Math.max(-20, rsPct * 2));
+  score += Math.min(10, Math.max(-10, rsTrend * 3));
+  if (vector === "SYNC") score += 10;
+  else if (vector === "D_LEAD" || vector === "M_LEAD") score += 5;
+  if (rsState === "Leading") score += 5;
+  score = Math.min(100, Math.max(0, Math.round(score)));
 
-  const { pe, pb, ps, ev_per_ebitda, roe, roic, roa, eps,
-    revenue_growth, net_profit_growth, gross_margin, net_profit_margin,
-    ebit_margin, current_ratio, quick_ratio, de, interest_coverage, dividend } = ratios;
+  const isActive = rsState === "Leading" || rsState === "Improving";
 
-  // === VALUATION (max ~25 pts) ===
-  if (pe !== undefined && pe > 0) {
-    if (pe < 8) { score += 12; signals.push({ type: "fundamental", signal: "P/E rất thấp", detail: `P/E = ${pe.toFixed(1)}`, impact: "positive" }); }
-    else if (pe < 12) { score += 8; signals.push({ type: "fundamental", signal: "P/E hấp dẫn", detail: `P/E = ${pe.toFixed(1)}`, impact: "positive" }); }
-    else if (pe < 18) { score += 3; }
-    else if (pe >= 30) { score -= 8; signals.push({ type: "fundamental", signal: "P/E cao", detail: `P/E = ${pe.toFixed(1)}`, impact: "negative" }); }
-  }
-
-  if (pb !== undefined && pb > 0) {
-    if (pb < 1) { score += 8; signals.push({ type: "fundamental", signal: "P/B < 1", detail: `P/B = ${pb.toFixed(2)}`, impact: "positive" }); }
-    else if (pb < 1.5) { score += 5; }
-    else if (pb < 2.5) { score += 2; }
-    else if (pb >= 4) { score -= 5; }
-  }
-
-  if (ev_per_ebitda !== undefined && ev_per_ebitda > 0) {
-    if (ev_per_ebitda < 8) score += 3;
-    else if (ev_per_ebitda > 20) score -= 3;
-  }
-
-  // === PROFITABILITY (max ~25 pts) ===
-  if (roe !== undefined) {
-    if (roe >= 25) { score += 12; signals.push({ type: "fundamental", signal: "ROE xuất sắc", detail: `ROE = ${roe.toFixed(1)}%`, impact: "positive" }); }
-    else if (roe >= 18) { score += 8; signals.push({ type: "fundamental", signal: "ROE tốt", detail: `ROE = ${roe.toFixed(1)}%`, impact: "positive" }); }
-    else if (roe >= 12) { score += 4; }
-    else if (roe < 5 && roe >= 0) { score -= 5; }
-    else if (roe !== undefined && roe < 0) { score -= 10; signals.push({ type: "fundamental", signal: "ROE âm", detail: "Lỗ vốn chủ", impact: "negative" }); }
-  }
-
-  if (roa !== undefined) {
-    if (roa >= 12) score += 5;
-    else if (roa >= 7) score += 3;
-    else if (roa < 2 && roa >= 0) score -= 3;
-  }
-
-  if (net_profit_margin !== undefined) {
-    if (net_profit_margin >= 20) { score += 5; signals.push({ type: "fundamental", signal: "Biên lợi nhuận cao", detail: `NPM = ${net_profit_margin.toFixed(1)}%`, impact: "positive" }); }
-    else if (net_profit_margin >= 10) score += 3;
-    else if (net_profit_margin < 3 && net_profit_margin >= 0) score -= 3;
-    else if (net_profit_margin !== undefined && net_profit_margin < 0) { score -= 8; signals.push({ type: "fundamental", signal: "Lỗ ròng", detail: `NPM = ${net_profit_margin.toFixed(1)}%`, impact: "negative" }); }
-  }
-
-  if (gross_margin !== undefined) {
-    if (gross_margin >= 40) score += 3;
-    else if (gross_margin < 15) score -= 3;
-  }
-
-  if (eps !== undefined) {
-    if (eps > 5000) { score += 5; signals.push({ type: "fundamental", signal: "EPS cao", detail: `EPS = ${eps.toFixed(0)}`, impact: "positive" }); }
-    else if (eps > 2000) score += 3;
-    else if (eps <= 0) { score -= 8; signals.push({ type: "fundamental", signal: "EPS âm", detail: "Công ty lỗ", impact: "negative" }); }
-  }
-
-  // === GROWTH (max ~15 pts) ===
-  if (revenue_growth !== undefined) {
-    if (revenue_growth > 30) { score += 8; signals.push({ type: "fundamental", signal: "Doanh thu tăng mạnh", detail: `+${revenue_growth.toFixed(1)}%`, impact: "positive" }); }
-    else if (revenue_growth > 15) { score += 5; }
-    else if (revenue_growth > 5) { score += 2; }
-    else if (revenue_growth < -10) { score -= 5; signals.push({ type: "fundamental", signal: "Doanh thu sụt giảm", detail: `${revenue_growth.toFixed(1)}%`, impact: "negative" }); }
-  }
-
-  if (net_profit_growth !== undefined) {
-    if (net_profit_growth > 30) { score += 7; signals.push({ type: "fundamental", signal: "Lợi nhuận tăng mạnh", detail: `+${net_profit_growth.toFixed(1)}%`, impact: "positive" }); }
-    else if (net_profit_growth > 15) score += 4;
-    else if (net_profit_growth < -20) { score -= 5; signals.push({ type: "fundamental", signal: "Lợi nhuận giảm mạnh", detail: `${net_profit_growth.toFixed(1)}%`, impact: "negative" }); }
-  }
-
-  // === SOLVENCY / LEVERAGE (max ~10 pts) ===
-  if (current_ratio !== undefined) {
-    if (current_ratio >= 2) score += 3;
-    else if (current_ratio >= 1.5) score += 2;
-    else if (current_ratio < 1) { score -= 5; signals.push({ type: "fundamental", signal: "Thanh khoản yếu", detail: `CR = ${current_ratio.toFixed(2)}`, impact: "negative" }); }
-  }
-
-  if (de !== undefined) {
-    if (de < 0.5) score += 3;
-    else if (de < 1) score += 1;
-    else if (de > 3) { score -= 5; signals.push({ type: "fundamental", signal: "Đòn bẩy cao", detail: `D/E = ${de.toFixed(2)}`, impact: "negative" }); }
-  }
-
-  if (interest_coverage !== undefined) {
-    if (interest_coverage > 5) score += 2;
-    else if (interest_coverage < 1.5 && interest_coverage > 0) { score -= 3; signals.push({ type: "fundamental", signal: "Khả năng trả lãi yếu", detail: `ICR = ${interest_coverage.toFixed(1)}`, impact: "negative" }); }
-  }
-
-  // === DIVIDEND ===
-  if (dividend !== undefined && dividend > 0) {
-    score += 2;
-    signals.push({ type: "fundamental", signal: "Có cổ tức", detail: `${dividend.toFixed(0)} VND/CP`, impact: "positive" });
-  }
-
-  return {
-    score: Math.max(0, Math.min(100, score)),
-    data: {
-      pe, pb, ps, ev_per_ebitda, roe, roic, roa, eps, bvps: ratios.bvps,
-      revenue: ratios.revenue, revenue_growth, net_profit: ratios.net_profit, net_profit_growth,
-      gross_margin, net_profit_margin, ebit_margin,
-      current_ratio, quick_ratio, de, interest_coverage,
-      dividend, market_cap: ratios.market_cap,
-    },
-    signals,
-  };
+  return { rsPct, rsState, vector, score, isActive };
 }
 
-// --------------- Composite ---------------
-
-function getAction(score: number): { action: string; confidence: string } {
-  if (score >= 80) return { action: "Strong Buy", confidence: "Rất cao" };
-  if (score >= 70) return { action: "Buy", confidence: "Cao" };
-  if (score >= 60) return { action: "Watch", confidence: "Trung bình" };
-  if (score >= 50) return { action: "Hold", confidence: "Thấp" };
-  if (score >= 40) return { action: "Avoid", confidence: "Thấp" };
-  return { action: "Sell", confidence: "Rất thấp" };
+function calcBucket(score: number): RSBucket {
+  if (score >= 85) return "PRIME";
+  if (score >= 75) return "ELITE";
+  if (score >= 60) return "CORE";
+  if (score >= 50) return "QUALITY";
+  return "WEAK";
 }
 
-export async function analyzeStock(
-  symbol: string
-): Promise<{
-  full_analysis: {
-    technical: ReturnType<typeof analyzeTechnicals>;
-    fundamental: ReturnType<typeof analyzeFundamentals>;
-    macro: Awaited<ReturnType<typeof analyzeMacro>>;
-  };
-  strategies: Record<Strategy, StockAnalysisResult>;
-}> {
-  const [priceData, ratiosData, macro] = await Promise.all([
-    getPriceHistory(symbol).catch(() => [] as StockOHLCV[]),
-    getCompanyRatios(symbol).catch(() => null),
-    analyzeMacro(),
-  ]);
+// ==================== MAIN ANALYSIS ====================
 
-  const technical = analyzeTechnicals(priceData);
-  const fundamental = analyzeFundamentals(ratiosData || { symbol });
-
-  const strategies: Record<string, StockAnalysisResult> = {};
-
-  for (const [key, config] of Object.entries(STRATEGY_CONFIGS)) {
-    const compositeScore =
-      fundamental.score * config.weights.fundamental +
-      technical.score * config.weights.technical +
-      macro.score * config.weights.macro;
-
-    const { action, confidence } = getAction(compositeScore);
-
-    strategies[key] = {
-      symbol: symbol.toUpperCase(),
-      score: compositeScore,
-      action, confidence,
-      current_price: technical.data.current_price,
-      support: technical.data.support,
-      resistance: technical.data.resistance,
-      signals: [...fundamental.signals, ...technical.signals, ...macro.signals],
-      fundamental_score: fundamental.score,
-      technical_score: technical.score,
-      macro_score: macro.score,
-      data: {
-        fundamental: fundamental.data,
-        technical: technical.data,
-        macro: macro.data,
-      },
-    };
-  }
-
-  return {
-    full_analysis: { technical, fundamental, macro },
-    strategies: strategies as Record<Strategy, StockAnalysisResult>,
-  };
-}
-
-// --------------- Screening ---------------
-
-export async function screenStocks(
-  strategy: Strategy | "all" = "all",
-  topN: number = 10
-): Promise<{
-  strategies: Record<string, StrategyResult>;
-  market_overview: { num_gainers: number; num_losers: number; num_unchanged: number };
-  macro: MacroData;
-  generated_at: string;
-}> {
-  const [stockList, allRatios, breadthData, macro] = await Promise.all([
+export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
+  // Step 1: Get all data sources
+  const [stockList, allRatios, vnindexData] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
-    getMarketBreadth().catch(() => []),
-    analyzeMacro(),
+    getIndexHistory("VNINDEX").catch(() => [] as StockOHLCV[]),
   ]);
 
-  let numGainers = 0, numLosers = 0, numUnchanged = 0;
-  breadthData.forEach((b) => { numGainers += b.advancing; numLosers += b.declining; numUnchanged += b.unchanged; });
-  if (breadthData.length === 0) {
-    stockList.forEach((s) => {
-      if (s.price_change_pct > 0) numGainers++;
-      else if (s.price_change_pct < 0) numLosers++;
-      else numUnchanged++;
-    });
-  }
-
+  // Step 2: Build ratios map & get top 500 by market cap
   const ratiosMap = new Map<string, CompanyRatios>();
   allRatios.forEach((r) => { if (r.symbol) ratiosMap.set(r.symbol, r); });
 
-  const candidates = stockList.filter((s) => s.total_volume > 10000 && s.close_price > 0);
-  const sortedByVolume = [...candidates].sort((a, b) => b.total_volume - a.total_volume).slice(0, 100);
+  // Join stock list with ratios for market cap
+  const stocksWithCap = stockList
+    .filter((s) => s.close_price > 0 && s.total_volume > 0)
+    .map((s) => ({
+      ...s,
+      marketCap: ratiosMap.get(s.symbol)?.market_cap ?? 0,
+      gtgd: (s.close_price * s.total_volume) / 1e9, // tỷ VND
+    }))
+    .filter((s) => s.marketCap > 0)
+    .sort((a, b) => b.marketCap - a.marketCap)
+    .slice(0, 500);
 
-  type AnalysisItem = {
-    stock: StockListItem;
-    ratios: CompanyRatios;
-    technical: ReturnType<typeof analyzeTechnicals>;
-    fundamental: ReturnType<typeof analyzeFundamentals>;
-  };
-  const analysisResults: AnalysisItem[] = [];
+  // Step 3: Filter by liquidity (GTGD >= 5 tỷ)
+  const liquidStocks = stocksWithCap.filter((s) => s.gtgd >= 5);
 
-  const batchSize = 10;
-  for (let i = 0; i < sortedByVolume.length; i += batchSize) {
-    const batch = sortedByVolume.slice(i, i + batchSize);
+  // Step 4: Take top N for detailed analysis
+  const toAnalyze = liquidStocks.slice(0, topN);
+
+  // Step 5: Batch fetch price histories
+  const toStocks: TOStock[] = [];
+  const rsStocks: RSStock[] = [];
+
+  const batchSize = 15;
+  for (let i = 0; i < toAnalyze.length; i += batchSize) {
+    const batch = toAnalyze.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (stock) => {
         try {
           const priceData = await getPriceHistory(stock.symbol);
-          const ratios = ratiosMap.get(stock.symbol) || { symbol: stock.symbol };
-          const technical = analyzeTechnicals(priceData);
-          const fundamental = analyzeFundamentals(ratios);
-          return { stock, ratios, technical, fundamental } as AnalysisItem;
+          if (priceData.length < 10) return null;
+
+          const ratios = ratiosMap.get(stock.symbol);
+
+          // TO calculations
+          const tpaths = calcTrendPath(priceData);
+          const { state, volRatio, rqs } = calcState(priceData);
+          const mtf = calcMTF(priceData);
+          const qtier = calcQTier(ratios);
+          const { miph, mi } = calcMIPhase(priceData);
+
+          const toPartial: Omit<TOStock, "rank"> = {
+            symbol: stock.symbol,
+            price: stock.close_price,
+            changePct: stock.price_change_pct,
+            gtgd: parseFloat(stock.gtgd.toFixed(1)),
+            state, tpaths, mtf, qtier, miph, mi, volRatio: parseFloat(volRatio.toFixed(2)), rqs,
+          };
+          const toStock: TOStock = { ...toPartial, rank: calcRank(toPartial) };
+
+          // RS calculations
+          const { rsPct, rsState, vector, score, isActive } = calcRS(priceData, vnindexData);
+          const rsStock: RSStock = {
+            symbol: stock.symbol,
+            price: stock.close_price,
+            changePct: stock.price_change_pct,
+            gtgd: parseFloat(stock.gtgd.toFixed(1)),
+            rsState, vector,
+            bucket: calcBucket(score),
+            rsPct, score, isActive,
+          };
+
+          return { toStock, rsStock };
         } catch { return null; }
       })
     );
-    results.forEach((r) => { if (r) analysisResults.push(r); });
+    results.forEach((r) => {
+      if (r) {
+        toStocks.push(r.toStock);
+        rsStocks.push(r.rsStock);
+      }
+    });
   }
 
-  const strategiesToProcess: Strategy[] =
-    strategy === "all" ? ["investing", "trading"] : [strategy];
+  // Step 6: Sort and categorize
+  toStocks.sort((a, b) => b.rank - a.rank);
+  rsStocks.sort((a, b) => b.score - a.score);
 
-  const strategyResults: Record<string, StrategyResult> = {};
+  const toTiers = {} as Record<TOTier, TOStock[]>;
+  for (const tier of TO_TIERS) {
+    toTiers[tier.key] = toStocks.filter(tier.filter);
+  }
 
-  for (const strat of strategiesToProcess) {
-    const config = STRATEGY_CONFIGS[strat];
-
-    const scored = analysisResults
-      .map((r) => {
-        const compositeScore =
-          r.fundamental.score * config.weights.fundamental +
-          r.technical.score * config.weights.technical +
-          macro.score * config.weights.macro;
-
-        const ratios = r.ratios;
-        if (config.thresholds.pe_max && ratios.pe && ratios.pe > config.thresholds.pe_max) return null;
-        if (config.thresholds.pb_max && ratios.pb && ratios.pb > config.thresholds.pb_max) return null;
-        if (config.thresholds.roe_min && ratios.roe !== undefined && ratios.roe < config.thresholds.roe_min) return null;
-        const rsi = r.technical.data.rsi;
-        if (config.thresholds.rsi_min && rsi < config.thresholds.rsi_min) return null;
-        if (config.thresholds.rsi_max && rsi > config.thresholds.rsi_max) return null;
-        if (compositeScore < config.thresholds.min_score) return null;
-
-        const { action, confidence } = getAction(compositeScore);
-        return {
-          symbol: r.stock.symbol, score: compositeScore, action, confidence,
-          current_price: r.technical.data.current_price,
-          support: r.technical.data.support, resistance: r.technical.data.resistance,
-          signals: [...r.fundamental.signals, ...r.technical.signals, ...macro.signals],
-          fundamental_score: r.fundamental.score,
-          technical_score: r.technical.score,
-          macro_score: macro.score,
-          data: { fundamental: r.fundamental.data, technical: r.technical.data, macro: macro.data },
-        } as StockAnalysisResult;
-      })
-      .filter((r): r is StockAnalysisResult => r !== null)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topN);
-
-    strategyResults[strat] = {
-      strategy: strat, strategy_name: config.name,
-      timeframe: config.timeframe, description: config.description,
-      total_analyzed: analysisResults.length, total_qualified: scored.length,
-      recommendations: scored, generated_at: new Date().toISOString(),
-    };
+  const rsCats = {} as Record<RSCategory, RSStock[]>;
+  for (const cat of RS_CATEGORIES) {
+    rsCats[cat.key] = rsStocks.filter(cat.filter);
   }
 
   return {
-    strategies: strategyResults,
-    market_overview: { num_gainers: numGainers, num_losers: numLosers, num_unchanged: numUnchanged },
-    macro: macro.data,
-    generated_at: new Date().toISOString(),
+    totalStocks: toStocks.length,
+    toStocks,
+    rsStocks,
+    toTiers,
+    rsCats,
+    counts: {
+      prime: toStocks.filter((s) => s.qtier === "PRIME").length,
+      valid: toStocks.filter((s) => s.qtier === "VALID").length,
+      tier1a: toTiers.tier1a.length,
+      tier2a: toTiers.tier2a.length,
+      active: rsStocks.filter((s) => s.isActive).length,
+      sync: rsCats.sync_active.length,
+      dLead: rsCats.d_lead_active.length,
+      mLead: rsCats.m_lead_active.length,
+    },
+    generatedAt: new Date().toISOString(),
   };
 }
