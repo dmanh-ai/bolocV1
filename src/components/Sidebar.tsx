@@ -1,9 +1,10 @@
-'use client';
+"use client";
 
-import { useAppStore } from '@/store/useAppStore';
-import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+import { useAppStore } from "@/store/useAppStore";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import type { NavigationPage } from "@/types/stock";
 import {
   LayoutDashboard,
   Search,
@@ -14,27 +15,27 @@ import {
   ChevronRight,
   Crosshair,
   Target,
-} from 'lucide-react';
+} from "lucide-react";
 
-const navItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'analysis', label: 'Phân tích & Chiến lược', icon: Target },
-  { id: 'screener', label: 'Bộ lọc cổ phiếu', icon: Search },
-  { id: 'watchlist', label: 'Watchlist', icon: Star },
-  { id: 'market', label: 'Thị trường', icon: TrendingUp },
-] as const;
+const navItems: { id: NavigationPage; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "analysis", label: "Phân tích & Chiến lược", icon: Target },
+  { id: "screener", label: "Bộ lọc cổ phiếu", icon: Search },
+  { id: "watchlist", label: "Watchlist", icon: Star },
+  { id: "market", label: "Thị trường", icon: TrendingUp },
+];
 
 export function Sidebar() {
-  const { activeTab, setActiveTab, sidebarOpen, setSidebarOpen } = useAppStore();
+  const { activeTab, setActiveTab, sidebarOpen, setSidebarOpen } =
+    useAppStore();
 
   return (
     <aside
       className={cn(
-        'fixed left-0 top-0 z-40 h-screen bg-card border-r border-border transition-all duration-300',
-        sidebarOpen ? 'w-64' : 'w-16'
+        "fixed left-0 top-0 z-40 h-screen bg-card border-r border-border transition-all duration-300",
+        sidebarOpen ? "w-64" : "w-16"
       )}
     >
-      {/* Logo */}
       <div className="flex items-center h-16 px-4 border-b border-border">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
@@ -48,24 +49,26 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 p-3 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
-          
+
           return (
             <Button
               key={item.id}
-              variant={isActive ? 'secondary' : 'ghost'}
+              variant={isActive ? "secondary" : "ghost"}
               className={cn(
-                'w-full justify-start gap-3 h-11',
-                !sidebarOpen && 'justify-center px-0',
-                isActive && 'bg-green-500/10 text-green-500 hover:bg-green-500/20'
+                "w-full justify-start gap-3 h-11",
+                !sidebarOpen && "justify-center px-0",
+                isActive &&
+                  "bg-green-500/10 text-green-500 hover:bg-green-500/20"
               )}
-              onClick={() => setActiveTab(item.id as any)}
+              onClick={() => setActiveTab(item.id)}
             >
-              <Icon className={cn('w-5 h-5', isActive && 'text-green-500')} />
+              <Icon
+                className={cn("w-5 h-5", isActive && "text-green-500")}
+              />
               {sidebarOpen && <span>{item.label}</span>}
             </Button>
           );
@@ -74,13 +77,12 @@ export function Sidebar() {
 
       <Separator />
 
-      {/* Settings */}
       <div className="p-3">
         <Button
           variant="ghost"
           className={cn(
-            'w-full justify-start gap-3',
-            !sidebarOpen && 'justify-center px-0'
+            "w-full justify-start gap-3",
+            !sidebarOpen && "justify-center px-0"
           )}
         >
           <Settings className="w-5 h-5" />
@@ -88,7 +90,6 @@ export function Sidebar() {
         </Button>
       </div>
 
-      {/* Toggle Button */}
       <Button
         variant="outline"
         size="icon"

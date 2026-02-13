@@ -1,103 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
+import {
+  analyzeStock,
+  screenStocks,
+  type Strategy,
+} from "@/lib/stock-analyzer";
 
-const PYTHON_PATH = "/home/z/.venv/bin/python3";
-const ANALYZER_PATH = "/home/z/my-project/python_api/stock_analyzer.py";
-
-interface PythonResult {
-  data?: any[];
-  error?: string;
-  [key: string]: any;
-}
-
-function runPythonScript(args: string[]): Promise<PythonResult> {
-  return new Promise((resolve, reject) => {
-    const process = spawn(PYTHON_PATH, [ANALYZER_PATH, ...args]);
-    
-    let stdout = "";
-    let stderr = "";
-    
-    process.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-    
-    process.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on("close", (code) => {
-      if (code !== 0) {
-        console.error("Python stderr:", stderr);
-        reject(new Error(stderr || `Process exited with code ${code}`));
-        return;
-      }
-      
-      try {
-        const result = JSON.parse(stdout);
-        resolve(result);
-      } catch (e) {
-        console.error("Failed to parse stdout:", stdout);
-        reject(new Error("Failed to parse Python output"));
-      }
-    });
-    
-    process.on("error", (err) => {
-      reject(err);
-    });
-    
-    setTimeout(() => {
-      process.kill();
-      reject(new Error("Timeout"));
-    }, 300000); // 5 minutes for screening
-  });
-}
+const VALID_STRATEGIES = ["investing", "trading", "speculation", "all"];
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get("action") || "screen";
-  
+
   try {
-    let result: PythonResult;
-    
     switch (action) {
-      case "screen":
+      case "screen": {
         const strategy = searchParams.get("strategy") || "all";
-        const topN = searchParams.get("top_n") || "10";
-        result = await runPythonScript(["screen", strategy, topN]);
-        break;
-        
-      case "analyze":
-        const symbol = searchParams.get("symbol");
-        if (!symbol) {
+        const topN = parseInt(searchParams.get("top_n") || "10", 10);
+
+        if (!VALID_STRATEGIES.includes(strategy)) {
           return NextResponse.json(
-            { success: false, error: "Symbol is required" },
+            { success: false, error: `Invalid strategy: ${strategy}` },
             { status: 400 }
           );
         }
-        result = await runPythonScript(["analyze", symbol]);
-        break;
-        
-      case "strategies":
-        result = await runPythonScript(["strategies"]);
-        break;
-        
+
+        const result = await screenStocks(
+          strategy as Strategy | "all",
+          topN
+        );
+        return NextResponse.json({ success: true, ...result });
+      }
+
+      case "analyze": {
+        const symbol = searchParams.get("symbol");
+        if (!symbol || !/^[A-Za-z0-9]+$/.test(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+
+        const result = await analyzeStock(symbol.toUpperCase());
+        return NextResponse.json({ success: true, ...result });
+      }
+
+      case "strategies": {
+        return NextResponse.json({
+          success: true,
+          data: {
+            investing: {
+              name: "Đầu tư dài hạn",
+              timeframe: "6 tháng - 1 năm",
+              description: "Focus vào fundamentals, định giá hợp lý",
+            },
+            trading: {
+              name: "Trading",
+              timeframe: "1 - 3 tuần",
+              description: "Focus vào xu hướng kỹ thuật",
+            },
+            speculation: {
+              name: "Đầu cơ",
+              timeframe: "2 - 4 tuần",
+              description: "Tận dụng biến động, momentum mạnh",
+            },
+          },
+        });
+      }
+
       default:
-        throw new Error(`Unknown action: ${action}`);
+        return NextResponse.json(
+          { success: false, error: `Unknown action: ${action}` },
+          { status: 400 }
+        );
     }
-    
-    if (result.error) {
-      return NextResponse.json(
-        { success: false, error: result.error },
-        { status: 500 }
-      );
-    }
-    
-    return NextResponse.json({ success: true, ...result });
-    
-  } catch (error: any) {
-    console.error("Error in analysis API:", error);
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Failed to analyze";
+    console.error("Error in analysis API:", message);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to analyze" },
+      { success: false, error: message },
       { status: 500 }
     );
   }

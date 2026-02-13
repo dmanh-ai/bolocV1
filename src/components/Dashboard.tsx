@@ -1,117 +1,103 @@
-'use client';
+"use client";
 
-import { useAppStore } from '@/store/useAppStore';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
+import { useAppStore } from "@/store/useAppStore";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   TrendingUp,
-  TrendingDown,
   Search,
   Star,
   BarChart3,
   Activity,
   ArrowUpRight,
   ArrowDownRight,
-} from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
-// Fetch stocks list
 async function fetchStocks() {
-  const res = await fetch('/api/stocks?action=list');
+  const res = await fetch("/api/stocks?action=list");
   return res.json();
 }
 
-// Fetch top gainers
 async function fetchTopGainers() {
-  const res = await fetch('/api/stocks?action=top_gainers');
+  const res = await fetch("/api/stocks?action=top_gainers");
   return res.json();
 }
 
-// Fetch top losers
 async function fetchTopLosers() {
-  const res = await fetch('/api/stocks?action=top_losers');
+  const res = await fetch("/api/stocks?action=top_losers");
   return res.json();
 }
 
-interface Stock {
+interface TopMover {
   symbol: string;
-  name?: string;
-  organ_name?: string;
-  change?: number;
-  price_change_pct_1d?: string;
-  last_price?: string;
-}
-
-interface TopMoverStock {
-  symbol: string;
-  index?: string;
-  last_price?: string;
-  price_change_pct_1d?: string;
-  accumulated_value?: string;
+  close_price: number;
+  percent_change: number;
 }
 
 export function Dashboard() {
   const { watchlist, setActiveTab } = useAppStore();
-  
-  // Fetch stocks list
+
   const { data: stocksData, isLoading } = useQuery({
-    queryKey: ['stocks-list'],
+    queryKey: ["stocks-list"],
     queryFn: fetchStocks,
   });
 
-  // Fetch top gainers
   const { data: gainersData, isLoading: loadingGainers } = useQuery({
-    queryKey: ['top-gainers'],
+    queryKey: ["top-gainers"],
     queryFn: fetchTopGainers,
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 60000,
   });
 
-  // Fetch top losers
   const { data: losersData, isLoading: loadingLosers } = useQuery({
-    queryKey: ['top-losers'],
+    queryKey: ["top-losers"],
     queryFn: fetchTopLosers,
     refetchInterval: 60000,
   });
 
   const totalStocks = stocksData?.count || 0;
-  
-  // Get real top movers from API
-  const topGainers: TopMoverStock[] = (gainersData?.data || []).slice(0, 5);
-  const topLosers: TopMoverStock[] = (losersData?.data || []).slice(0, 5);
+  const topGainers: TopMover[] = (gainersData?.data || []).slice(0, 5);
+  const topLosers: TopMover[] = (losersData?.data || []).slice(0, 5);
 
-  // Stats cards data
   const stats = [
     {
-      title: 'Tổng cổ phiếu',
-      value: totalStocks || '---',
-      description: 'HOSE, HNX, UPCOM',
+      title: "Tổng cổ phiếu",
+      value: totalStocks || "---",
+      description: "HOSE, HNX, UPCOM",
       icon: BarChart3,
-      color: 'text-blue-500',
-      bg: 'bg-blue-500/10',
+      color: "text-blue-500",
+      bg: "bg-blue-500/10",
     },
     {
-      title: 'Watchlist',
+      title: "Watchlist",
       value: watchlist.length,
-      description: 'Cổ phiếu theo dõi',
+      description: "Cổ phiếu theo dõi",
       icon: Star,
-      color: 'text-yellow-500',
-      bg: 'bg-yellow-500/10',
+      color: "text-yellow-500",
+      bg: "bg-yellow-500/10",
     },
     {
-      title: 'Top tăng hôm nay',
-      value: topGainers[0]?.symbol || '---',
-      description: topGainers[0]?.price_change_pct_1d ? `+${parseFloat(topGainers[0].price_change_pct_1d).toFixed(2)}%` : 'Đang tải...',
+      title: "Top tăng hôm nay",
+      value: topGainers[0]?.symbol || "---",
+      description: topGainers[0]?.percent_change
+        ? `+${topGainers[0].percent_change.toFixed(2)}%`
+        : "Đang tải...",
       icon: TrendingUp,
-      color: 'text-green-500',
-      bg: 'bg-green-500/10',
+      color: "text-green-500",
+      bg: "bg-green-500/10",
     },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground">
@@ -119,7 +105,6 @@ export function Dashboard() {
         </p>
       </div>
 
-      {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-3">
         {stats.map((stat) => {
           const Icon = stat.icon;
@@ -139,16 +124,16 @@ export function Dashboard() {
                 ) : (
                   <div className="text-2xl font-bold">{stat.value}</div>
                 )}
-                <p className="text-xs text-muted-foreground">{stat.description}</p>
+                <p className="text-xs text-muted-foreground">
+                  {stat.description}
+                </p>
               </CardContent>
             </Card>
           );
         })}
       </div>
 
-      {/* Main Content Grid */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Quick Actions */}
         <Card>
           <CardHeader>
             <CardTitle>Thao tác nhanh</CardTitle>
@@ -158,7 +143,7 @@ export function Dashboard() {
             <Button
               className="w-full justify-start gap-3 h-12"
               variant="outline"
-              onClick={() => setActiveTab('screener')}
+              onClick={() => setActiveTab("screener")}
             >
               <Search className="w-5 h-5 text-green-500" />
               <div className="text-left">
@@ -168,11 +153,11 @@ export function Dashboard() {
                 </div>
               </div>
             </Button>
-            
+
             <Button
               className="w-full justify-start gap-3 h-12"
               variant="outline"
-              onClick={() => setActiveTab('watchlist')}
+              onClick={() => setActiveTab("watchlist")}
             >
               <Star className="w-5 h-5 text-yellow-500" />
               <div className="text-left">
@@ -186,7 +171,7 @@ export function Dashboard() {
             <Button
               className="w-full justify-start gap-3 h-12"
               variant="outline"
-              onClick={() => setActiveTab('market')}
+              onClick={() => setActiveTab("market")}
             >
               <Activity className="w-5 h-5 text-blue-500" />
               <div className="text-left">
@@ -199,11 +184,12 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Top Movers */}
         <Card>
           <CardHeader>
             <CardTitle>Top biến động</CardTitle>
-            <CardDescription>Cổ phiếu tăng/giảm mạnh nhất (Realtime)</CardDescription>
+            <CardDescription>
+              Cổ phiếu tăng/giảm mạnh nhất hôm nay
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {loadingGainers || loadingLosers ? (
@@ -213,58 +199,78 @@ export function Dashboard() {
               </div>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2">
-                {/* Top Gainers */}
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <ArrowUpRight className="w-4 h-4 text-green-500" />
-                    <span className="text-sm font-medium text-green-500">Tăng nhất</span>
+                    <span className="text-sm font-medium text-green-500">
+                      Tăng nhất
+                    </span>
                   </div>
                   <div className="space-y-2">
-                    {topGainers.length > 0 ? topGainers.map((stock) => (
-                      <div
-                        key={stock.symbol}
-                        className="flex items-center justify-between p-2 rounded-lg bg-green-500/5 hover:bg-green-500/10 cursor-pointer"
-                      >
-                        <div>
-                          <div className="font-medium">{stock.symbol}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {stock.last_price ? `${parseFloat(stock.last_price).toLocaleString()} VND` : '---'}
+                    {topGainers.length > 0 ? (
+                      topGainers.map((stock) => (
+                        <div
+                          key={stock.symbol}
+                          className="flex items-center justify-between p-2 rounded-lg bg-green-500/5 hover:bg-green-500/10 cursor-pointer"
+                        >
+                          <div>
+                            <div className="font-medium">{stock.symbol}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {stock.close_price
+                                ? `${stock.close_price.toLocaleString()} VND`
+                                : "---"}
+                            </div>
                           </div>
+                          <Badge
+                            variant="outline"
+                            className="text-green-500 border-green-500/20"
+                          >
+                            +{stock.percent_change?.toFixed(2) || "0"}%
+                          </Badge>
                         </div>
-                        <Badge variant="outline" className="text-green-500 border-green-500/20">
-                          +{stock.price_change_pct_1d ? parseFloat(stock.price_change_pct_1d).toFixed(2) : '0'}%
-                        </Badge>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground">
+                        Không có dữ liệu
                       </div>
-                    )) : (
-                      <div className="text-sm text-muted-foreground">Không có dữ liệu</div>
                     )}
                   </div>
                 </div>
 
-                {/* Top Losers */}
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <ArrowDownRight className="w-4 h-4 text-red-500" />
-                    <span className="text-sm font-medium text-red-500">Giảm nhất</span>
+                    <span className="text-sm font-medium text-red-500">
+                      Giảm nhất
+                    </span>
                   </div>
                   <div className="space-y-2">
-                    {topLosers.length > 0 ? topLosers.map((stock) => (
-                      <div
-                        key={stock.symbol}
-                        className="flex items-center justify-between p-2 rounded-lg bg-red-500/5 hover:bg-red-500/10 cursor-pointer"
-                      >
-                        <div>
-                          <div className="font-medium">{stock.symbol}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {stock.last_price ? `${parseFloat(stock.last_price).toLocaleString()} VND` : '---'}
+                    {topLosers.length > 0 ? (
+                      topLosers.map((stock) => (
+                        <div
+                          key={stock.symbol}
+                          className="flex items-center justify-between p-2 rounded-lg bg-red-500/5 hover:bg-red-500/10 cursor-pointer"
+                        >
+                          <div>
+                            <div className="font-medium">{stock.symbol}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {stock.close_price
+                                ? `${stock.close_price.toLocaleString()} VND`
+                                : "---"}
+                            </div>
                           </div>
+                          <Badge
+                            variant="outline"
+                            className="text-red-500 border-red-500/20"
+                          >
+                            {stock.percent_change?.toFixed(2) || "0"}%
+                          </Badge>
                         </div>
-                        <Badge variant="outline" className="text-red-500 border-red-500/20">
-                          {stock.price_change_pct_1d ? parseFloat(stock.price_change_pct_1d).toFixed(2) : '0'}%
-                        </Badge>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground">
+                        Không có dữ liệu
                       </div>
-                    )) : (
-                      <div className="text-sm text-muted-foreground">Không có dữ liệu</div>
                     )}
                   </div>
                 </div>
@@ -274,15 +280,20 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Watchlist Preview */}
       {watchlist.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
               <CardTitle>Watchlist của bạn</CardTitle>
-              <CardDescription>{watchlist.length} cổ phiếu đang theo dõi</CardDescription>
+              <CardDescription>
+                {watchlist.length} cổ phiếu đang theo dõi
+              </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setActiveTab('watchlist')}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActiveTab("watchlist")}
+            >
               Xem tất cả
             </Button>
           </CardHeader>

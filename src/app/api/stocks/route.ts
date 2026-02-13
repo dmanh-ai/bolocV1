@@ -1,170 +1,224 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
+import {
+  getStockList,
+  getStocksByExchange,
+  getIndustries,
+  getPriceHistory,
+  getIntradayData,
+  getCompanyRatios,
+  getFinancials,
+  getCompanyOverview,
+  getTopGainers,
+  getTopLosers,
+  searchStocks,
+  getMarketPE,
+  getMarketPB,
+  getAllCompanyRatios,
+} from "@/lib/vnstock-api";
 
-const PYTHON_PATH = "/home/z/.venv/bin/python3";
-const SCRIPT_PATH = "/home/z/my-project/python_api/stock_api.py";
-
-interface PythonResult {
-  data?: any[];
-  count?: number;
-  error?: string;
-  [key: string]: any;
-}
-
-function runPythonScript(args: string[]): Promise<PythonResult> {
-  return new Promise((resolve, reject) => {
-    const process = spawn(PYTHON_PATH, [SCRIPT_PATH, ...args]);
-    
-    let stdout = "";
-    let stderr = "";
-    
-    process.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-    
-    process.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on("close", (code) => {
-      if (code !== 0) {
-        console.error("Python stderr:", stderr);
-        reject(new Error(stderr || `Process exited with code ${code}`));
-        return;
-      }
-      
-      try {
-        const result = JSON.parse(stdout);
-        resolve(result);
-      } catch (e) {
-        console.error("Failed to parse stdout:", stdout);
-        reject(new Error("Failed to parse Python output"));
-      }
-    });
-    
-    process.on("error", (err) => {
-      reject(err);
-    });
-    
-    // Set timeout
-    setTimeout(() => {
-      process.kill();
-      reject(new Error("Timeout"));
-    }, 120000);
-  });
+function validateSymbol(symbol: string | null): symbol is string {
+  return !!symbol && /^[A-Za-z0-9]+$/.test(symbol);
 }
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get("action") || "list";
-  
+
   try {
-    let result: PythonResult;
-    
     switch (action) {
-      case "list":
-        result = await runPythonScript(["list"]);
-        break;
-        
-      case "by_exchange":
+      case "list": {
+        const data = await getStockList();
+        return NextResponse.json({
+          success: true,
+          data,
+          count: data.length,
+        });
+      }
+
+      case "by_exchange": {
         const exchange = searchParams.get("exchange") || "HOSE";
-        result = await runPythonScript(["by_exchange", exchange]);
-        break;
-        
-      case "industries":
-        result = await runPythonScript(["industries"]);
-        break;
-        
-      case "price_history":
+        const data = await getStocksByExchange(exchange);
+        return NextResponse.json({
+          success: true,
+          data,
+          count: data.length,
+        });
+      }
+
+      case "industries": {
+        const data = await getIndustries();
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "price_history": {
         const symbol = searchParams.get("symbol");
-        const start = searchParams.get("start") || "";
-        const end = searchParams.get("end") || "";
-        if (!symbol) throw new Error("Symbol is required");
-        result = await runPythonScript(["price_history", symbol, start, end]);
-        break;
-        
-      case "intraday":
-        const sym = searchParams.get("symbol");
-        if (!sym) throw new Error("Symbol is required");
-        result = await runPythonScript(["intraday", sym]);
-        break;
-        
-      case "ratios":
-        const symRatios = searchParams.get("symbol");
-        if (!symRatios) throw new Error("Symbol is required");
-        result = await runPythonScript(["ratios", symRatios]);
-        break;
-        
-      case "finance":
-        const symFinance = searchParams.get("symbol");
-        if (!symFinance) throw new Error("Symbol is required");
-        result = await runPythonScript(["finance", symFinance]);
-        break;
-        
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const data = await getPriceHistory(symbol);
+        return NextResponse.json({
+          success: true,
+          data,
+          count: data.length,
+        });
+      }
+
+      case "intraday": {
+        const symbol = searchParams.get("symbol");
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const data = await getIntradayData(symbol);
+        return NextResponse.json({
+          success: true,
+          data,
+          count: data.length,
+        });
+      }
+
+      case "ratios": {
+        const symbol = searchParams.get("symbol");
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const ratios = await getCompanyRatios(symbol);
+        return NextResponse.json({
+          success: true,
+          key_metrics: ratios,
+        });
+      }
+
+      case "finance": {
+        const symbol = searchParams.get("symbol");
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const [balance, income, cashflow] = await Promise.all([
+          getFinancials(symbol, "balance_sheet").catch(() => []),
+          getFinancials(symbol, "income_statement").catch(() => []),
+          getFinancials(symbol, "cash_flow").catch(() => []),
+        ]);
+        return NextResponse.json({
+          success: true,
+          data: { balance_sheet: balance, income_statement: income, cash_flow: cashflow },
+        });
+      }
+
       case "company":
-        const symCompany = searchParams.get("symbol");
-        if (!symCompany) throw new Error("Symbol is required");
-        result = await runPythonScript(["company", symCompany]);
-        break;
-        
-      case "company_profile":
-        const symProfile = searchParams.get("symbol");
-        if (!symProfile) throw new Error("Symbol is required");
-        result = await runPythonScript(["company_profile", symProfile]);
-        break;
-        
-      case "trading_stats":
-        const symTrading = searchParams.get("symbol");
-        if (!symTrading) throw new Error("Symbol is required");
-        result = await runPythonScript(["trading_stats", symTrading]);
-        break;
-        
-      case "top_gainers":
-        result = await runPythonScript(["top_gainers"]);
-        break;
-        
-      case "top_losers":
-        result = await runPythonScript(["top_losers"]);
-        break;
-        
-      case "top_value":
-        result = await runPythonScript(["top_value"]);
-        break;
-        
-      case "market_pe":
-        result = await runPythonScript(["market_pe"]);
-        break;
-        
-      case "market_pb":
-        result = await runPythonScript(["market_pb"]);
-        break;
-        
-      case "search":
+      case "company_profile": {
+        const symbol = searchParams.get("symbol");
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const data = await getCompanyOverview(symbol);
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "trading_stats": {
+        const symbol = searchParams.get("symbol");
+        if (!validateSymbol(symbol)) {
+          return NextResponse.json(
+            { success: false, error: "Valid symbol is required" },
+            { status: 400 }
+          );
+        }
+        const all = await getStockList();
+        const stock = all.find(
+          (s) => s.symbol.toUpperCase() === symbol.toUpperCase()
+        );
+        return NextResponse.json({ success: true, data: stock || null });
+      }
+
+      case "top_gainers": {
+        const data = await getTopGainers();
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "top_losers": {
+        const data = await getTopLosers();
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "market_pe": {
+        const data = await getMarketPE();
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "market_pb": {
+        const data = await getMarketPB();
+        return NextResponse.json({ success: true, data });
+      }
+
+      case "search": {
         const q = searchParams.get("q") || "";
-        result = await runPythonScript(["search", q]);
-        break;
-        
-      case "screener":
-        result = await runPythonScript(["screener"]);
-        break;
-        
+        if (!q) {
+          return NextResponse.json({ success: true, data: [] });
+        }
+        const data = await searchStocks(q);
+        return NextResponse.json({
+          success: true,
+          data,
+          count: data.length,
+        });
+      }
+
+      case "screener": {
+        const ratios = await getAllCompanyRatios();
+        const stocks = await getStockList();
+        const stockMap = new Map(stocks.map((s) => [s.symbol, s]));
+
+        const enriched = ratios
+          .filter((r) => r.symbol && stockMap.has(r.symbol))
+          .map((r) => {
+            const stock = stockMap.get(r.symbol)!;
+            return {
+              symbol: r.symbol,
+              close_price: stock.close_price,
+              price_change_pct: stock.price_change_pct,
+              total_volume: stock.total_volume,
+              exchange: stock.exchange,
+              pe: r.pe,
+              pb: r.pb,
+              roe: r.roe,
+              roa: r.roa,
+              eps: r.eps,
+            };
+          });
+
+        return NextResponse.json({
+          success: true,
+          data: enriched,
+          count: enriched.length,
+        });
+      }
+
       default:
-        throw new Error(`Unknown action: ${action}`);
+        return NextResponse.json(
+          { success: false, error: `Unknown action: ${action}` },
+          { status: 400 }
+        );
     }
-    
-    if (result.error) {
-      return NextResponse.json(
-        { success: false, error: result.error },
-        { status: 500 }
-      );
-    }
-    
-    return NextResponse.json({ success: true, ...result });
-    
-  } catch (error: any) {
-    console.error("Error in stocks API:", error);
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Failed to fetch data";
+    console.error("Error in stocks API:", message);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to fetch data" },
+      { success: false, error: message },
       { status: 500 }
     );
   }
