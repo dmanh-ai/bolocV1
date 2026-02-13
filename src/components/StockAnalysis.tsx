@@ -1,627 +1,499 @@
 'use client';
 
-import { useAppStore } from '@/store/useAppStore';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  TrendingUp,
-  TrendingDown,
-  AlertTriangle,
-  ArrowUpRight,
-  ArrowDownRight,
   RefreshCw,
-  Building2,
-  Globe,
-  BarChart3,
+  ChevronDown,
+  ChevronRight,
+  Activity,
+  Zap,
   Clock,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { screenStocks, analyzeStock, type StrategyResult, type MacroData } from '@/lib/stock-analyzer';
+import { useState, useMemo } from 'react';
+import {
+  runFullAnalysis,
+  TO_TIERS,
+  RS_CATEGORIES,
+  type AnalysisResult,
+  type TOStock,
+  type RSStock,
+  type TOTier,
+  type RSCategory,
+  type State,
+  type TrendPath,
+  type MTFSync,
+  type QTier,
+  type MIPhase,
+  type RSState,
+  type RSVector,
+  type RSBucket,
+} from '@/lib/stock-analyzer';
 
-const STRATEGY_CONFIG = {
-  investing: {
-    name: "Đầu tư dài hạn",
-    timeframe: "6 tháng - 1 năm",
-    icon: Building2,
-    color: "text-blue-500",
-    bgColor: "bg-blue-500",
-    lightBg: "bg-blue-500/10",
-    description: "Fundamentals mạnh, định giá hợp lý, tăng trưởng bền vững",
-    criteria: ["P/E < 25", "ROE > 8%", "Tăng trưởng DT", "Biên LN tốt"]
-  },
-  trading: {
-    name: "Trading ngắn hạn",
-    timeframe: "1 - 4 tuần",
-    icon: TrendingUp,
-    color: "text-green-500",
-    bgColor: "bg-green-500",
-    lightBg: "bg-green-500/10",
-    description: "Xu hướng kỹ thuật mạnh, momentum tốt, thanh khoản cao",
-    criteria: ["Uptrend", "RSI 25-75", "MACD bullish", "Volume tăng"]
-  },
+// ==================== BADGE COLOR MAPS ====================
+
+const STATE_COLORS: Record<State, string> = {
+  BREAKOUT: 'bg-green-500 text-white',
+  CONFIRM: 'bg-emerald-600 text-white',
+  RETEST: 'bg-blue-500 text-white',
+  TREND: 'bg-cyan-600 text-white',
+  BASE: 'bg-amber-600 text-white',
+  WEAK: 'bg-zinc-600 text-zinc-300',
 };
 
-function getActionBadge(action: string) {
-  const styles: Record<string, string> = {
-    'Strong Buy': 'bg-green-500 text-white',
-    'Buy': 'bg-green-400 text-white',
-    'Watch': 'bg-blue-500 text-white',
-    'Hold': 'bg-yellow-500 text-white',
-    'Avoid': 'bg-orange-500 text-white',
-    'Sell': 'bg-red-500 text-white',
-  };
-  return styles[action] || 'bg-gray-500 text-white';
-}
+const TPATH_COLORS: Record<TrendPath, string> = {
+  S_MAJOR: 'bg-green-500 text-white',
+  MAJOR: 'bg-emerald-600 text-white',
+  MINOR: 'bg-amber-600 text-white',
+  WEAK: 'bg-zinc-600 text-zinc-300',
+};
 
-function getScoreColor(score: number) {
-  if (score >= 70) return 'text-green-500';
-  if (score >= 60) return 'text-blue-500';
-  if (score >= 50) return 'text-yellow-500';
-  return 'text-red-500';
-}
+const MTF_COLORS: Record<MTFSync, string> = {
+  SYNC: 'bg-green-500 text-white',
+  PARTIAL: 'bg-amber-500 text-white',
+  WEAK: 'bg-zinc-600 text-zinc-300',
+};
 
-function getScoreBg(score: number) {
-  if (score >= 70) return 'bg-green-500';
-  if (score >= 60) return 'bg-blue-500';
-  if (score >= 50) return 'bg-yellow-500';
-  return 'bg-red-500';
-}
+const QTIER_COLORS: Record<QTier, string> = {
+  PRIME: 'bg-green-500 text-white',
+  VALID: 'bg-blue-500 text-white',
+  WATCH: 'bg-zinc-600 text-zinc-300',
+};
 
-function val(v: number | undefined | null, decimals = 1, suffix = '') {
-  if (v === undefined || v === null || isNaN(v)) return 'N/A';
-  return v.toFixed(decimals) + suffix;
-}
+const MIPH_COLORS: Record<MIPhase, string> = {
+  PEAK: 'bg-green-500 text-white',
+  HIGH: 'bg-emerald-600 text-white',
+  MID: 'bg-amber-500 text-white',
+  LOW: 'bg-zinc-600 text-zinc-300',
+};
 
-function MacroOverview({ macro }: { macro?: MacroData }) {
-  if (!macro) return null;
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-lg">
-          <Globe className="w-5 h-5 text-purple-500" />
-          Phân tích Vĩ mô
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="p-3 rounded-lg bg-secondary/50">
-            <div className="text-xs text-muted-foreground">VN-Index Trend</div>
-            <div className={`font-bold ${macro.vnindex_trend === 'Uptrend' ? 'text-green-500' : macro.vnindex_trend === 'Downtrend' ? 'text-red-500' : ''}`}>
-              {macro.vnindex_trend}
-            </div>
-          </div>
-          <div className="p-3 rounded-lg bg-secondary/50">
-            <div className="text-xs text-muted-foreground">VN-Index RSI</div>
-            <div className="font-bold">{macro.vnindex_rsi?.toFixed(0) || 'N/A'}</div>
-          </div>
-          <div className="p-3 rounded-lg bg-secondary/50">
-            <div className="text-xs text-muted-foreground">Breadth</div>
-            <div className="font-bold">
-              <span className="text-green-500">{macro.market_advancing}</span>
-              {' / '}
-              <span className="text-red-500">{macro.market_declining}</span>
-            </div>
-          </div>
-          <div className="p-3 rounded-lg bg-secondary/50">
-            <div className="text-xs text-muted-foreground">Khối ngoại</div>
-            <div className={`font-bold ${macro.foreign_net_value > 0 ? 'text-green-500' : 'text-red-500'}`}>
-              {macro.foreign_net_value ? `${(macro.foreign_net_value / 1e9).toFixed(1)} tỷ` : 'N/A'}
-            </div>
-          </div>
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Tâm lý thị trường:</span>
-          <Badge variant="outline">{macro.market_sentiment}</Badge>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+const RS_STATE_COLORS: Record<RSState, string> = {
+  Leading: 'bg-green-500 text-white',
+  Improving: 'bg-emerald-600 text-white',
+  Neutral: 'bg-amber-500 text-white',
+  Weakening: 'bg-orange-600 text-white',
+  Declining: 'bg-red-600 text-white',
+};
 
-function StockCard({ stock, onSelect }: {
-  stock: StrategyResult['recommendations'][0];
-  onSelect: (symbol: string) => void;
-}) {
-  return (
-    <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => onSelect(stock.symbol)}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${getScoreBg(stock.score)}`}>
-              {stock.score.toFixed(0)}
-            </div>
-            <div>
-              <div className="font-bold text-lg">{stock.symbol}</div>
-              <div className="text-sm text-muted-foreground">
-                {stock.current_price?.toLocaleString() || '---'} VND
-              </div>
-            </div>
-          </div>
-          <Badge className={getActionBadge(stock.action)}>
-            {stock.action}
-          </Badge>
-        </div>
+const VECTOR_COLORS: Record<RSVector, string> = {
+  SYNC: 'bg-green-500 text-white',
+  D_LEAD: 'bg-blue-500 text-white',
+  M_LEAD: 'bg-cyan-600 text-white',
+  NEUT: 'bg-zinc-600 text-zinc-300',
+};
 
-        <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-          <div className="p-2 rounded bg-secondary/50">
-            <div className="text-muted-foreground text-xs">Hỗ trợ</div>
-            <div className="font-medium">{stock.support?.toLocaleString() || '---'}</div>
-          </div>
-          <div className="p-2 rounded bg-secondary/50">
-            <div className="text-muted-foreground text-xs">Kháng cự</div>
-            <div className="font-medium">{stock.resistance?.toLocaleString() || '---'}</div>
-          </div>
-        </div>
+const BUCKET_COLORS: Record<RSBucket, string> = {
+  PRIME: 'bg-green-500 text-white',
+  ELITE: 'bg-emerald-600 text-white',
+  CORE: 'bg-blue-500 text-white',
+  QUALITY: 'bg-amber-500 text-white',
+  WEAK: 'bg-zinc-600 text-zinc-300',
+};
 
-        <div className="flex gap-1 text-xs flex-wrap">
-          <div className="px-2 py-1 rounded bg-blue-500/10">
-            <span className="text-muted-foreground">F:</span> <span className={getScoreColor(stock.fundamental_score)}>{stock.fundamental_score?.toFixed(0)}</span>
-          </div>
-          <div className="px-2 py-1 rounded bg-green-500/10">
-            <span className="text-muted-foreground">T:</span> <span className={getScoreColor(stock.technical_score)}>{stock.technical_score?.toFixed(0)}</span>
-          </div>
-          <div className="px-2 py-1 rounded bg-purple-500/10">
-            <span className="text-muted-foreground">M:</span> <span className={getScoreColor(stock.macro_score)}>{stock.macro_score?.toFixed(0)}</span>
-          </div>
-        </div>
+// ==================== TIER ACCENT COLORS ====================
 
-        {stock.signals && stock.signals.length > 0 && (
-          <div className="mt-3 pt-3 border-t">
-            <div className="flex flex-wrap gap-1">
-              {stock.signals.filter(s => s.impact === 'positive').slice(0, 3).map((signal, idx) => (
-                <Badge key={idx} variant="outline" className="text-xs text-green-500 border-green-500/30">
-                  {signal.signal}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+const TIER_HEADER_COLORS: Record<TOTier, string> = {
+  tier1a: 'border-l-green-500 bg-green-500/5',
+  tier2a: 'border-l-blue-500 bg-blue-500/5',
+  s_major_trend: 'border-l-cyan-500 bg-cyan-500/5',
+  fresh_breakout: 'border-l-amber-500 bg-amber-500/5',
+  quality_retest: 'border-l-purple-500 bg-purple-500/5',
+  pipeline: 'border-l-zinc-500 bg-zinc-500/5',
+};
 
-function StrategySection({
-  strategyKey,
-  data,
-  isLoading,
-  onSelectStock
-}: {
-  strategyKey: string;
-  data: StrategyResult | undefined;
-  isLoading: boolean;
-  onSelectStock: (symbol: string) => void;
-}) {
-  const config = STRATEGY_CONFIG[strategyKey as keyof typeof STRATEGY_CONFIG];
-  const Icon = config.icon;
+const CAT_HEADER_COLORS: Record<RSCategory, string> = {
+  sync_active: 'border-l-green-500 bg-green-500/5',
+  d_lead_active: 'border-l-blue-500 bg-blue-500/5',
+  m_lead_active: 'border-l-cyan-500 bg-cyan-500/5',
+  probe_watch: 'border-l-amber-500 bg-amber-500/5',
+};
 
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-lg ${config.lightBg}`}>
-              <Icon className={`w-6 h-6 ${config.color}`} />
-            </div>
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                {config.name}
-                <Badge variant="outline" className="font-normal">
-                  {config.timeframe}
-                </Badge>
-              </CardTitle>
-              <CardDescription>{config.description}</CardDescription>
-            </div>
-          </div>
-          {!isLoading && data && (
-            <div className="text-right text-sm">
-              <div className="text-muted-foreground">Phân tích {data.total_analyzed} CP</div>
-              <div className="text-green-500">{data.total_qualified} đạt yêu cầu</div>
-            </div>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {config.criteria.map((c, idx) => (
-            <Badge key={idx} variant="secondary" className="text-xs">{c}</Badge>
-          ))}
-        </div>
+// ==================== SORT HELPERS ====================
 
-        {isLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3].map((i) => (<Skeleton key={i} className="h-44 w-full" />))}
-          </div>
-        ) : data?.recommendations && data.recommendations.length > 0 ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {data.recommendations.map((stock) => (
-              <StockCard key={stock.symbol} stock={stock} onSelect={onSelectStock} />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 text-muted-foreground">
-            <AlertTriangle className="w-8 h-8 mx-auto mb-2" />
-            <p>Không tìm thấy cổ phiếu phù hợp</p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+type SortDir = 'asc' | 'desc';
+type TOSortKey = 'symbol' | 'price' | 'changePct' | 'gtgd' | 'state' | 'tpaths' | 'mtf' | 'qtier' | 'miph' | 'mi' | 'rank';
+type RSSortKey = 'symbol' | 'price' | 'changePct' | 'gtgd' | 'rsState' | 'vector' | 'bucket' | 'rsPct' | 'score';
 
-function StockDetailModal({ symbol, onClose }: { symbol: string; onClose: () => void }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['stock-analysis', symbol],
-    queryFn: () => analyzeStock(symbol),
-    enabled: !!symbol,
+function sortTOStocks(stocks: TOStock[], key: TOSortKey, dir: SortDir): TOStock[] {
+  return [...stocks].sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    if (typeof av === 'number' && typeof bv === 'number') {
+      return dir === 'asc' ? av - bv : bv - av;
+    }
+    return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
   });
+}
 
-  if (isLoading) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-        <Card className="w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
-          <CardContent className="p-6">
-            <div className="space-y-4">
-              <Skeleton className="h-8 w-32" />
-              <Skeleton className="h-40 w-full" />
-              <Skeleton className="h-40 w-full" />
-            </div>
-          </CardContent>
-        </Card>
+function sortRSStocks(stocks: RSStock[], key: RSSortKey, dir: SortDir): RSStock[] {
+  return [...stocks].sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    if (typeof av === 'number' && typeof bv === 'number') {
+      return dir === 'asc' ? av - bv : bv - av;
+    }
+    return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+}
+
+// ==================== SMALL COMPONENTS ====================
+
+function CellBadge({ value, colorMap }: { value: string; colorMap: Record<string, string> }) {
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold leading-tight ${colorMap[value] || 'bg-zinc-700 text-zinc-300'}`}>
+      {value}
+    </span>
+  );
+}
+
+function PctCell({ value }: { value: number }) {
+  const color = value > 0 ? 'text-green-400' : value < 0 ? 'text-red-400' : 'text-zinc-400';
+  return <span className={`font-mono text-xs ${color}`}>{value > 0 ? '+' : ''}{value.toFixed(2)}%</span>;
+}
+
+function MIBar({ value }: { value: number }) {
+  const color = value >= 70 ? 'bg-green-500' : value >= 50 ? 'bg-emerald-500' : value >= 30 ? 'bg-amber-500' : 'bg-red-500';
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-10 h-1.5 rounded-full bg-zinc-700 overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
       </div>
-    );
+      <span className="text-xs font-mono text-zinc-300">{value}</span>
+    </div>
+  );
+}
+
+function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
+  label: string;
+  sortKey: string;
+  currentKey: string;
+  currentDir: SortDir;
+  onSort: (key: string) => void;
+}) {
+  const isActive = currentKey === sortKey;
+  return (
+    <th
+      className="px-2 py-2 text-left text-[11px] font-semibold text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap"
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      {isActive && (
+        <span className="ml-1 text-zinc-300">{currentDir === 'asc' ? '▲' : '▼'}</span>
+      )}
+    </th>
+  );
+}
+
+// ==================== TO TABLE ====================
+
+function TOTable({ stocks }: { stocks: TOStock[] }) {
+  const [sortKey, setSortKey] = useState<TOSortKey>('rank');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const sorted = useMemo(() => sortTOStocks(stocks, sortKey, sortDir), [stocks, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key as TOSortKey); setSortDir('desc'); }
+  };
+
+  if (stocks.length === 0) {
+    return <div className="py-4 text-center text-zinc-500 text-sm">Không tìm thấy mã nào</div>;
   }
 
-  const analysis = data?.full_analysis;
-  const strategies = data?.strategies;
-
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <Card className="w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
-        <CardHeader className="flex flex-row items-center justify-between sticky top-0 bg-card z-10">
-          <div>
-            <CardTitle className="text-2xl">{symbol}</CardTitle>
-            <CardDescription>Phân tích tổng hợp: Cơ bản + Kỹ thuật + Vĩ mô</CardDescription>
-          </div>
-          <Button variant="ghost" onClick={onClose}>✕</Button>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Strategy Scores */}
-          <div className="grid gap-4 sm:grid-cols-2">
-            {Object.entries(strategies || {}).map(([key, result]) => {
-              const config = STRATEGY_CONFIG[key as keyof typeof STRATEGY_CONFIG];
-              if (!config) return null;
-              const Icon = config.icon;
-              return (
-                <Card key={key} className="p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Icon className={`w-5 h-5 ${config.color}`} />
-                    <span className="font-medium">{config.name}</span>
-                  </div>
-                  <div className="flex items-end gap-3">
-                    <div className={`text-3xl font-bold ${getScoreColor(result.score)}`}>
-                      {result.score?.toFixed(0)}
-                    </div>
-                    <Badge className={getActionBadge(result.action)}>{result.action}</Badge>
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-1 text-xs">
-                    <div className="text-center p-1 rounded bg-blue-500/10">F: {result.fundamental_score?.toFixed(0)}</div>
-                    <div className="text-center p-1 rounded bg-green-500/10">T: {result.technical_score?.toFixed(0)}</div>
-                    <div className="text-center p-1 rounded bg-purple-500/10">M: {result.macro_score?.toFixed(0)}</div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-
-          {/* Fundamental */}
-          {analysis?.fundamental && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-blue-500" />
-                  Phân tích Cơ bản
-                  <Badge variant="outline" className={getScoreColor(analysis.fundamental.score)}>
-                    {analysis.fundamental.score}/100
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Định giá</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="P/E" value={val(analysis.fundamental.data?.pe)} />
-                      <Metric label="P/B" value={val(analysis.fundamental.data?.pb, 2)} />
-                      <Metric label="P/S" value={val(analysis.fundamental.data?.ps, 2)} />
-                      <Metric label="EV/EBITDA" value={val(analysis.fundamental.data?.ev_per_ebitda)} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Lợi nhuận & Hiệu quả</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="ROE" value={val(analysis.fundamental.data?.roe, 1, '%')} />
-                      <Metric label="ROA" value={val(analysis.fundamental.data?.roa, 1, '%')} />
-                      <Metric label="Biên LN ròng" value={val(analysis.fundamental.data?.net_profit_margin, 1, '%')} />
-                      <Metric label="Biên gộp" value={val(analysis.fundamental.data?.gross_margin, 1, '%')} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Tăng trưởng</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="DT tăng trưởng" value={val(analysis.fundamental.data?.revenue_growth, 1, '%')} green={analysis.fundamental.data?.revenue_growth && analysis.fundamental.data.revenue_growth > 0} />
-                      <Metric label="LN tăng trưởng" value={val(analysis.fundamental.data?.net_profit_growth, 1, '%')} green={analysis.fundamental.data?.net_profit_growth && analysis.fundamental.data.net_profit_growth > 0} />
-                      <Metric label="EPS" value={val(analysis.fundamental.data?.eps, 0)} />
-                      <Metric label="Cổ tức" value={analysis.fundamental.data?.dividend ? val(analysis.fundamental.data.dividend, 0, ' VND') : 'N/A'} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Khả năng thanh toán & Đòn bẩy</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="Current Ratio" value={val(analysis.fundamental.data?.current_ratio, 2)} />
-                      <Metric label="Quick Ratio" value={val(analysis.fundamental.data?.quick_ratio, 2)} />
-                      <Metric label="D/E" value={val(analysis.fundamental.data?.de, 2)} />
-                      <Metric label="ICR" value={val(analysis.fundamental.data?.interest_coverage)} />
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Technical */}
-          {analysis?.technical && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-green-500" />
-                  Phân tích Kỹ thuật
-                  <Badge variant="outline" className={getScoreColor(analysis.technical.score)}>
-                    {analysis.technical.score}/100
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Giá & Xu hướng</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="Giá hiện tại" value={analysis.technical.data?.current_price?.toLocaleString() || 'N/A'} />
-                      <Metric label="Xu hướng" value={analysis.technical.data?.trend || 'N/A'} green={analysis.technical.data?.trend === 'Uptrend'} />
-                      <Metric label="Return ngày" value={val(analysis.technical.data?.daily_return, 2, '%')} green={analysis.technical.data?.daily_return > 0} />
-                      <Metric label="Volatility 20d" value={val(analysis.technical.data?.volatility, 1, '%')} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Moving Averages</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
-                      <Metric label="MA20" value={`${analysis.technical.data?.ma20?.toFixed(0) || 'N/A'} (${val(analysis.technical.data?.price_vs_ma20_pct, 1, '%')})`} green={analysis.technical.data?.price_vs_ma20_pct > 0} />
-                      <Metric label="MA50" value={`${analysis.technical.data?.ma50?.toFixed(0) || 'N/A'} (${val(analysis.technical.data?.price_vs_ma50_pct, 1, '%')})`} green={analysis.technical.data?.price_vs_ma50_pct > 0} />
-                      <Metric label="MA200" value={`${analysis.technical.data?.ma200?.toFixed(0) || 'N/A'} (${val(analysis.technical.data?.price_vs_ma200_pct, 1, '%')})`} green={analysis.technical.data?.price_vs_ma200_pct > 0} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Chỉ báo Momentum</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="RSI (14)" value={val(analysis.technical.data?.rsi)} />
-                      <Metric label="MACD" value={val(analysis.technical.data?.macd, 2)} green={analysis.technical.data?.macd > 0} />
-                      <Metric label="MACD Signal" value={val(analysis.technical.data?.macd_signal, 2)} />
-                      <Metric label="MACD Hist" value={val(analysis.technical.data?.macd_hist, 2)} green={analysis.technical.data?.macd_hist > 0} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-muted-foreground mb-2">Bollinger Bands & Volume</div>
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      <Metric label="BB Upper" value={analysis.technical.data?.bb_upper?.toFixed(0) || 'N/A'} />
-                      <Metric label="BB Lower" value={analysis.technical.data?.bb_lower?.toFixed(0) || 'N/A'} />
-                      <Metric label="Volume Ratio" value={`${analysis.technical.data?.volume_ratio || 'N/A'}x`} />
-                      <div className="grid grid-cols-2 gap-1">
-                        <div className="p-2 rounded bg-green-500/10 text-center">
-                          <div className="text-[10px] text-green-500">Hỗ trợ</div>
-                          <div className="text-xs font-bold">{analysis.technical.data?.support?.toLocaleString()}</div>
-                        </div>
-                        <div className="p-2 rounded bg-red-500/10 text-center">
-                          <div className="text-[10px] text-red-500">Kháng cự</div>
-                          <div className="text-xs font-bold">{analysis.technical.data?.resistance?.toLocaleString()}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Macro */}
-          {analysis?.macro && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Globe className="w-5 h-5 text-purple-500" />
-                  Phân tích Vĩ mô
-                  <Badge variant="outline" className={getScoreColor(analysis.macro.score)}>
-                    {analysis.macro.score}/100
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                  <Metric label="VN-Index" value={analysis.macro.data?.vnindex_trend || 'N/A'} green={analysis.macro.data?.vnindex_trend === 'Uptrend'} />
-                  <Metric label="VNI RSI" value={val(analysis.macro.data?.vnindex_rsi, 0)} />
-                  <Metric label="Tăng / Giảm" value={`${analysis.macro.data?.market_advancing} / ${analysis.macro.data?.market_declining}`} />
-                  <Metric label="Khối ngoại" value={analysis.macro.data?.foreign_net_value ? `${(analysis.macro.data.foreign_net_value / 1e9).toFixed(1)} tỷ` : 'N/A'} green={analysis.macro.data?.foreign_net_value > 0} />
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Signals */}
-          {analysis && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Tín hiệu phân tích</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {[...analysis.fundamental.signals, ...analysis.technical.signals, ...analysis.macro.signals].map((s, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
-                      {s.impact === 'positive' ? (
-                        <ArrowUpRight className="w-4 h-4 text-green-500 shrink-0" />
-                      ) : s.impact === 'negative' ? (
-                        <ArrowDownRight className="w-4 h-4 text-red-500 shrink-0" />
-                      ) : (
-                        <div className="w-4 h-4 rounded-full bg-yellow-500/20 shrink-0" />
-                      )}
-                      <Badge variant="outline" className="text-[10px] shrink-0">
-                        {s.type === 'fundamental' ? 'CB' : s.type === 'technical' ? 'KT' : 'VM'}
-                      </Badge>
-                      <span className="font-medium">{s.signal}</span>
-                      <span className="text-muted-foreground">{s.detail}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </CardContent>
-      </Card>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-zinc-800">
+            <SortHeader label="Ticker" sortKey="symbol" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Price" sortKey="price" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="%" sortKey="changePct" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="GTGD" sortKey="gtgd" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="State" sortKey="state" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="TPaths" sortKey="tpaths" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="MTF" sortKey="mtf" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="QTier" sortKey="qtier" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="MIPh" sortKey="miph" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="MI" sortKey="mi" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Rank" sortKey="rank" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((s) => (
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+              <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
+              <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
+              <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
+              <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
+              <td className="px-2 py-1.5"><CellBadge value={s.state} colorMap={STATE_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.tpaths} colorMap={TPATH_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.mtf} colorMap={MTF_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.qtier} colorMap={QTIER_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.miph} colorMap={MIPH_COLORS} /></td>
+              <td className="px-2 py-1.5"><MIBar value={s.mi} /></td>
+              <td className="px-2 py-1.5 font-mono text-xs font-bold text-amber-400">{s.rank}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function Metric({ label, value, green }: { label: string; value: string; green?: boolean | number | null }) {
+// ==================== RS TABLE ====================
+
+function RSTable({ stocks }: { stocks: RSStock[] }) {
+  const [sortKey, setSortKey] = useState<RSSortKey>('score');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const sorted = useMemo(() => sortRSStocks(stocks, sortKey, sortDir), [stocks, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key as RSSortKey); setSortDir('desc'); }
+  };
+
+  if (stocks.length === 0) {
+    return <div className="py-4 text-center text-zinc-500 text-sm">Không tìm thấy mã nào</div>;
+  }
+
   return (
-    <div className="p-2 rounded bg-secondary/50">
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className={`text-sm font-bold ${green === true ? 'text-green-500' : green === false ? 'text-red-500' : ''}`}>
-        {value}
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-zinc-800">
+            <SortHeader label="Ticker" sortKey="symbol" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Price" sortKey="price" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="%Chg" sortKey="changePct" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="GTGD" sortKey="gtgd" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="State" sortKey="rsState" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Vector" sortKey="vector" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Bucket" sortKey="bucket" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="RS%" sortKey="rsPct" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+            <SortHeader label="Score" sortKey="score" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((s) => (
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+              <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
+              <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
+              <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
+              <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
+              <td className="px-2 py-1.5"><CellBadge value={s.rsState} colorMap={RS_STATE_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.vector} colorMap={VECTOR_COLORS} /></td>
+              <td className="px-2 py-1.5"><CellBadge value={s.bucket} colorMap={BUCKET_COLORS} /></td>
+              <td className="px-2 py-1.5">
+                <span className={`font-mono text-xs font-bold ${s.rsPct > 0 ? 'text-green-400' : s.rsPct < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
+                  {s.rsPct > 0 ? '+' : ''}{s.rsPct.toFixed(1)}%
+                </span>
+              </td>
+              <td className="px-2 py-1.5">
+                <MIBar value={s.score} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ==================== COLLAPSIBLE SECTION ====================
+
+function TierSection({ name, description, count, color, defaultOpen, children }: {
+  name: string;
+  description: string;
+  count: number;
+  color: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen ?? count > 0);
+
+  return (
+    <div className={`rounded-lg border border-zinc-800 overflow-hidden ${color} border-l-4`}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-zinc-800/30 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          {open ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />}
+          <span className="font-bold text-sm text-zinc-100">{name}</span>
+          <span className="text-xs text-zinc-500">{description}</span>
+        </div>
+        <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 text-xs font-mono">
+          {count}
+        </Badge>
+      </button>
+      {open && (
+        <div className="px-2 pb-2">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== SUMMARY STATS ====================
+
+function StatCard({ label, value, color }: { label: string; value: number | string; color?: string }) {
+  return (
+    <div className="flex flex-col items-center p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+      <span className="text-[11px] text-zinc-500 uppercase tracking-wider">{label}</span>
+      <span className={`text-xl font-bold font-mono ${color || 'text-zinc-100'}`}>{value}</span>
+    </div>
+  );
+}
+
+// ==================== LOADING SKELETON ====================
+
+function AnalysisLoading() {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-5 gap-3">
+        {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-16 rounded-lg" />)}
       </div>
+      {[1, 2, 3].map(i => (
+        <div key={i} className="rounded-lg border border-zinc-800 p-4 space-y-3">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-32 w-full" />
+        </div>
+      ))}
     </div>
   );
 }
+
+// ==================== MAIN COMPONENT ====================
 
 export function StockAnalysis() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
-
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['all-recommendations'],
-    queryFn: () => screenStocks('all', 8),
-    staleTime: 5 * 60 * 1000,
+  const { data, isLoading, refetch, isFetching } = useQuery<AnalysisResult>({
+    queryKey: ['stock-analysis-v5'],
+    queryFn: () => runFullAnalysis(200),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
   });
 
-  const marketOverview = data?.market_overview;
-  const strategies = data?.strategies as Record<string, StrategyResult> | undefined;
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Phân tích & Đề xuất</h1>
-          <p className="text-muted-foreground">
-            Đánh giá cổ phiếu dựa trên Cơ bản + Kỹ thuật + Vĩ mô
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-100">
+            Stock Setups V5.3
+          </h1>
+          <p className="text-sm text-zinc-500">
+            Technical Oscillator + Relative Strength | Top 500 vốn hoá
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isFetching} className="gap-2">
-          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-          {isFetching ? 'Đang cập nhật...' : 'Cập nhật'}
-        </Button>
+        <div className="flex items-center gap-3">
+          {data && (
+            <span className="text-xs text-zinc-600 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {new Date(data.generatedAt).toLocaleString('vi-VN')}
+            </span>
+          )}
+          <Button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            size="sm"
+            variant="outline"
+            className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+            {isFetching ? 'Đang tải...' : 'Cập nhật'}
+          </Button>
+        </div>
       </div>
 
-      {/* Market + Macro Overview */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-500/10">
-                <ArrowUpRight className="w-5 h-5 text-green-500" />
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">CP tăng</div>
-                <div className="text-2xl font-bold text-green-500">{marketOverview?.num_gainers || 0}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-red-500/10">
-                <ArrowDownRight className="w-5 h-5 text-red-500" />
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">CP giảm</div>
-                <div className="text-2xl font-bold text-red-500">{marketOverview?.num_losers || 0}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-purple-500/10">
-                <Globe className="w-5 h-5 text-purple-500" />
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">Tâm lý TT</div>
-                <div className="text-lg font-bold">{data?.macro?.market_sentiment || '---'}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-blue-500/10">
-                <Clock className="w-5 h-5 text-blue-500" />
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">Cập nhật</div>
-                <div className="text-sm font-medium">
-                  {data?.generated_at ? new Date(data.generated_at).toLocaleString('vi-VN') : '---'}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {isLoading || !data ? (
+        <AnalysisLoading />
+      ) : (
+        <Tabs defaultValue="to" className="space-y-4">
+          <TabsList className="grid w-full grid-cols-2 h-auto p-1 bg-zinc-900 border border-zinc-800">
+            <TabsTrigger
+              value="to"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
+            >
+              <Activity className="w-4 h-4" />
+              <span className="font-bold text-sm">TO Best Setups</span>
+              <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
+                {data.toStocks.length}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger
+              value="rs"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-blue-400"
+            >
+              <Zap className="w-4 h-4" />
+              <span className="font-bold text-sm">RS Best Setups</span>
+              <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
+                {data.rsStocks.length}
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
 
-      {/* Macro detail */}
-      <MacroOverview macro={data?.macro} />
+          {/* ========= TO TAB ========= */}
+          <TabsContent value="to" className="space-y-4">
+            {/* Summary Stats */}
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              <StatCard label="Total" value={data.totalStocks} />
+              <StatCard label="PRIME" value={data.counts.prime} color="text-green-400" />
+              <StatCard label="VALID" value={data.counts.valid} color="text-blue-400" />
+              <StatCard label="Tier 1A" value={data.counts.tier1a} color="text-green-400" />
+              <StatCard label="Tier 2A" value={data.counts.tier2a} color="text-blue-400" />
+              <StatCard
+                label="Setups"
+                value={TO_TIERS.reduce((sum, t) => sum + (data.toTiers[t.key]?.length || 0), 0)}
+                color="text-amber-400"
+              />
+            </div>
 
-      {/* Strategy Tabs */}
-      <Tabs defaultValue="investing" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2 h-auto p-1">
-          {Object.entries(STRATEGY_CONFIG).map(([key, config]) => {
-            const Icon = config.icon;
-            const count = strategies?.[key]?.recommendations?.length || 0;
-            return (
-              <TabsTrigger key={key} value={key} className="flex items-center gap-2 py-3">
-                <Icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{config.name}</span>
-                <Badge variant="secondary" className="ml-1">{count}</Badge>
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
-
-        {Object.keys(STRATEGY_CONFIG).map((strategyKey) => (
-          <TabsContent key={strategyKey} value={strategyKey}>
-            <StrategySection
-              strategyKey={strategyKey}
-              data={strategies?.[strategyKey]}
-              isLoading={isLoading}
-              onSelectStock={setSelectedSymbol}
-            />
+            {/* Tier Sections */}
+            {TO_TIERS.map((tier) => (
+              <TierSection
+                key={tier.key}
+                name={tier.name}
+                description={tier.description}
+                count={data.toTiers[tier.key]?.length || 0}
+                color={TIER_HEADER_COLORS[tier.key]}
+                defaultOpen={tier.key === 'tier1a' || tier.key === 'tier2a'}
+              >
+                <TOTable stocks={data.toTiers[tier.key] || []} />
+              </TierSection>
+            ))}
           </TabsContent>
-        ))}
-      </Tabs>
 
-      {selectedSymbol && (
-        <StockDetailModal symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
+          {/* ========= RS TAB ========= */}
+          <TabsContent value="rs" className="space-y-4">
+            {/* Summary Stats */}
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+              <StatCard label="Total" value={data.rsStocks.length} />
+              <StatCard label="ACTIVE" value={data.counts.active} color="text-green-400" />
+              <StatCard label="SYNC" value={data.counts.sync} color="text-green-400" />
+              <StatCard label="D_LEAD" value={data.counts.dLead} color="text-blue-400" />
+              <StatCard label="M_LEAD" value={data.counts.mLead} color="text-cyan-400" />
+            </div>
+
+            {/* Category Sections */}
+            {RS_CATEGORIES.map((cat) => (
+              <TierSection
+                key={cat.key}
+                name={cat.name}
+                description={cat.description}
+                count={data.rsCats[cat.key]?.length || 0}
+                color={CAT_HEADER_COLORS[cat.key]}
+                defaultOpen={cat.key === 'sync_active'}
+              >
+                <RSTable stocks={data.rsCats[cat.key] || []} />
+              </TierSection>
+            ))}
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );
