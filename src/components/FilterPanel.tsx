@@ -1,24 +1,28 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { Slider } from '@/components/ui/slider';
-import { Label } from '@/components/ui/label';
+import { useEffect, useState } from "react";
+import { Slider } from "@/components/ui/slider";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { RotateCcw, Filter } from 'lucide-react';
-import { useFilterStore } from '@/stores';
-import { sectors } from '@/types/stock';
+} from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { RotateCcw, Filter } from "lucide-react";
+import { useAppStore } from "@/store/useAppStore";
+import { SECTORS } from "@/types/stock";
+
+const PE_RANGE = { min: 0, max: 100, step: 1 } as const;
+const PB_RANGE = { min: 0, max: 20, step: 0.1 } as const;
+const ROE_RANGE = { min: 0, max: 50, step: 0.5 } as const;
 
 export function FilterPanel() {
-  const { filters, setFilter, resetFilters } = useFilterStore();
+  const { filters, setFilter, resetFilters } = useAppStore();
   const [localFilters, setLocalFilters] = useState(filters);
 
   useEffect(() => {
@@ -26,25 +30,22 @@ export function FilterPanel() {
   }, [filters]);
 
   const handleSliderChange = (
-    key: 'peMin' | 'peMax' | 'pbMin' | 'pbMax' | 'roeMin' | 'roeMax',
+    key: "peMin" | "peMax" | "pbMin" | "pbMax" | "roeMin" | "roeMax",
     value: number[]
   ) => {
     setLocalFilters((prev) => ({ ...prev, [key]: value[0] }));
   };
 
   const handleSliderCommit = (
-    key: 'peMin' | 'peMax' | 'pbMin' | 'pbMax' | 'roeMin' | 'roeMax',
+    key: "peMin" | "peMax" | "pbMin" | "pbMax" | "roeMin" | "roeMax",
     value: number[]
   ) => {
     setFilter(key, value[0]);
   };
 
-  const handleSelectChange = (
-    key: 'marketCap' | 'sector',
-    value: string
-  ) => {
-    if (key === 'marketCap') {
-      setFilter(key, value as 'all' | 'small' | 'mid' | 'large');
+  const handleSelectChange = (key: "marketCap" | "sector", value: string) => {
+    if (key === "marketCap") {
+      setFilter(key, value as "all" | "small" | "mid" | "large");
     } else {
       setFilter(key, value);
     }
@@ -55,7 +56,7 @@ export function FilterPanel() {
       <CardHeader className="flex flex-row items-center justify-between pb-4">
         <CardTitle className="flex items-center gap-2 text-lg">
           <Filter className="h-5 w-5" />
-          Filters
+          Bộ lọc
         </CardTitle>
         <Button
           variant="ghost"
@@ -68,7 +69,6 @@ export function FilterPanel() {
         </Button>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* P/E Ratio */}
         <div className="space-y-3">
           <Label className="text-sm font-medium">P/E Ratio</Label>
           <div className="flex items-center gap-4">
@@ -78,27 +78,27 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, peMin: value }));
-                setFilter('peMin', value);
+                setFilter("peMin", value);
               }}
               className="w-20 h-8"
-              min={0}
+              min={PE_RANGE.min}
             />
             <Slider
               value={[localFilters.peMin]}
-              min={0}
-              max={100}
-              step={1}
-              onValueChange={(value) => handleSliderChange('peMin', value)}
-              onValueCommit={(value) => handleSliderCommit('peMin', value)}
+              min={PE_RANGE.min}
+              max={PE_RANGE.max}
+              step={PE_RANGE.step}
+              onValueChange={(value) => handleSliderChange("peMin", value)}
+              onValueCommit={(value) => handleSliderCommit("peMin", value)}
               className="flex-1"
             />
             <Slider
               value={[localFilters.peMax]}
-              min={0}
-              max={100}
-              step={1}
-              onValueChange={(value) => handleSliderChange('peMax', value)}
-              onValueCommit={(value) => handleSliderCommit('peMax', value)}
+              min={PE_RANGE.min}
+              max={PE_RANGE.max}
+              step={PE_RANGE.step}
+              onValueChange={(value) => handleSliderChange("peMax", value)}
+              onValueCommit={(value) => handleSliderCommit("peMax", value)}
               className="flex-1"
             />
             <Input
@@ -107,19 +107,14 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, peMax: value }));
-                setFilter('peMax', value);
+                setFilter("peMax", value);
               }}
               className="w-20 h-8"
-              min={0}
+              min={PE_RANGE.min}
             />
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Min: {localFilters.peMin}</span>
-            <span>Max: {localFilters.peMax}</span>
           </div>
         </div>
 
-        {/* P/B Ratio */}
         <div className="space-y-3">
           <Label className="text-sm font-medium">P/B Ratio</Label>
           <div className="flex items-center gap-4">
@@ -129,28 +124,28 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, pbMin: value }));
-                setFilter('pbMin', value);
+                setFilter("pbMin", value);
               }}
               className="w-20 h-8"
-              min={0}
-              step={0.1}
+              min={PB_RANGE.min}
+              step={PB_RANGE.step}
             />
             <Slider
               value={[localFilters.pbMin]}
-              min={0}
-              max={20}
-              step={0.1}
-              onValueChange={(value) => handleSliderChange('pbMin', value)}
-              onValueCommit={(value) => handleSliderCommit('pbMin', value)}
+              min={PB_RANGE.min}
+              max={PB_RANGE.max}
+              step={PB_RANGE.step}
+              onValueChange={(value) => handleSliderChange("pbMin", value)}
+              onValueCommit={(value) => handleSliderCommit("pbMin", value)}
               className="flex-1"
             />
             <Slider
               value={[localFilters.pbMax]}
-              min={0}
-              max={20}
-              step={0.1}
-              onValueChange={(value) => handleSliderChange('pbMax', value)}
-              onValueCommit={(value) => handleSliderCommit('pbMax', value)}
+              min={PB_RANGE.min}
+              max={PB_RANGE.max}
+              step={PB_RANGE.step}
+              onValueChange={(value) => handleSliderChange("pbMax", value)}
+              onValueCommit={(value) => handleSliderCommit("pbMax", value)}
               className="flex-1"
             />
             <Input
@@ -159,20 +154,15 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, pbMax: value }));
-                setFilter('pbMax', value);
+                setFilter("pbMax", value);
               }}
               className="w-20 h-8"
-              min={0}
-              step={0.1}
+              min={PB_RANGE.min}
+              step={PB_RANGE.step}
             />
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Min: {localFilters.pbMin}</span>
-            <span>Max: {localFilters.pbMax}</span>
           </div>
         </div>
 
-        {/* ROE */}
         <div className="space-y-3">
           <Label className="text-sm font-medium">ROE %</Label>
           <div className="flex items-center gap-4">
@@ -182,27 +172,27 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, roeMin: value }));
-                setFilter('roeMin', value);
+                setFilter("roeMin", value);
               }}
               className="w-20 h-8"
-              min={0}
+              min={ROE_RANGE.min}
             />
             <Slider
               value={[localFilters.roeMin]}
-              min={0}
-              max={50}
-              step={0.5}
-              onValueChange={(value) => handleSliderChange('roeMin', value)}
-              onValueCommit={(value) => handleSliderCommit('roeMin', value)}
+              min={ROE_RANGE.min}
+              max={ROE_RANGE.max}
+              step={ROE_RANGE.step}
+              onValueChange={(value) => handleSliderChange("roeMin", value)}
+              onValueCommit={(value) => handleSliderCommit("roeMin", value)}
               className="flex-1"
             />
             <Slider
               value={[localFilters.roeMax]}
-              min={0}
-              max={50}
-              step={0.5}
-              onValueChange={(value) => handleSliderChange('roeMax', value)}
-              onValueCommit={(value) => handleSliderCommit('roeMax', value)}
+              min={ROE_RANGE.min}
+              max={ROE_RANGE.max}
+              step={ROE_RANGE.step}
+              onValueChange={(value) => handleSliderChange("roeMax", value)}
+              onValueCommit={(value) => handleSliderCommit("roeMax", value)}
               className="flex-1"
             />
             <Input
@@ -211,49 +201,43 @@ export function FilterPanel() {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 setLocalFilters((prev) => ({ ...prev, roeMax: value }));
-                setFilter('roeMax', value);
+                setFilter("roeMax", value);
               }}
               className="w-20 h-8"
-              min={0}
+              min={ROE_RANGE.min}
             />
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Min: {localFilters.roeMin}%</span>
-            <span>Max: {localFilters.roeMax}%</span>
           </div>
         </div>
 
-        {/* Market Cap */}
         <div className="space-y-3">
-          <Label className="text-sm font-medium">Market Cap</Label>
+          <Label className="text-sm font-medium">Vốn hóa</Label>
           <Select
             value={localFilters.marketCap}
-            onValueChange={(value) => handleSelectChange('marketCap', value)}
+            onValueChange={(value) => handleSelectChange("marketCap", value)}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select market cap" />
+              <SelectValue placeholder="Chọn vốn hóa" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Cap</SelectItem>
-              <SelectItem value="small">Small Cap (&lt;50B VND)</SelectItem>
-              <SelectItem value="mid">Mid Cap (50B-100B VND)</SelectItem>
-              <SelectItem value="large">Large Cap (&gt;100B VND)</SelectItem>
+              <SelectItem value="all">Tất cả</SelectItem>
+              <SelectItem value="small">Small Cap</SelectItem>
+              <SelectItem value="mid">Mid Cap</SelectItem>
+              <SelectItem value="large">Large Cap</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {/* Sector */}
         <div className="space-y-3">
-          <Label className="text-sm font-medium">Sector</Label>
+          <Label className="text-sm font-medium">Ngành</Label>
           <Select
             value={localFilters.sector}
-            onValueChange={(value) => handleSelectChange('sector', value)}
+            onValueChange={(value) => handleSelectChange("sector", value)}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select sector" />
+              <SelectValue placeholder="Chọn ngành" />
             </SelectTrigger>
             <SelectContent>
-              {sectors.map((sector) => (
+              {SECTORS.map((sector) => (
                 <SelectItem key={sector} value={sector}>
                   {sector}
                 </SelectItem>
