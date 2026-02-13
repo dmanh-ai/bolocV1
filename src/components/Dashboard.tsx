@@ -21,51 +21,34 @@ import {
   ArrowDownRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-
-async function fetchStocks() {
-  const res = await fetch("/api/stocks?action=list");
-  return res.json();
-}
-
-async function fetchTopGainers() {
-  const res = await fetch("/api/stocks?action=top_gainers");
-  return res.json();
-}
-
-async function fetchTopLosers() {
-  const res = await fetch("/api/stocks?action=top_losers");
-  return res.json();
-}
-
-interface TopMover {
-  symbol: string;
-  close_price: number;
-  percent_change: number;
-}
+import {
+  getStockList,
+  getTopGainers,
+  getTopLosers,
+  type TopMover,
+} from "@/lib/vnstock-api";
 
 export function Dashboard() {
   const { watchlist, setActiveTab } = useAppStore();
 
-  const { data: stocksData, isLoading } = useQuery({
+  const { data: stockList, isLoading } = useQuery({
     queryKey: ["stocks-list"],
-    queryFn: fetchStocks,
+    queryFn: getStockList,
   });
 
-  const { data: gainersData, isLoading: loadingGainers } = useQuery({
+  const { data: topGainers = [], isLoading: loadingGainers } = useQuery({
     queryKey: ["top-gainers"],
-    queryFn: fetchTopGainers,
+    queryFn: async () => (await getTopGainers()).slice(0, 5),
     refetchInterval: 60000,
   });
 
-  const { data: losersData, isLoading: loadingLosers } = useQuery({
+  const { data: topLosers = [], isLoading: loadingLosers } = useQuery({
     queryKey: ["top-losers"],
-    queryFn: fetchTopLosers,
+    queryFn: async () => (await getTopLosers()).slice(0, 5),
     refetchInterval: 60000,
   });
 
-  const totalStocks = stocksData?.count || 0;
-  const topGainers: TopMover[] = (gainersData?.data || []).slice(0, 5);
-  const topLosers: TopMover[] = (losersData?.data || []).slice(0, 5);
+  const totalStocks = stockList?.length || 0;
 
   const stats = [
     {
@@ -208,7 +191,7 @@ export function Dashboard() {
                   </div>
                   <div className="space-y-2">
                     {topGainers.length > 0 ? (
-                      topGainers.map((stock) => (
+                      topGainers.map((stock: TopMover) => (
                         <div
                           key={stock.symbol}
                           className="flex items-center justify-between p-2 rounded-lg bg-green-500/5 hover:bg-green-500/10 cursor-pointer"
@@ -246,7 +229,7 @@ export function Dashboard() {
                   </div>
                   <div className="space-y-2">
                     {topLosers.length > 0 ? (
-                      topLosers.map((stock) => (
+                      topLosers.map((stock: TopMover) => (
                         <div
                           key={stock.symbol}
                           className="flex items-center justify-between p-2 rounded-lg bg-red-500/5 hover:bg-red-500/10 cursor-pointer"

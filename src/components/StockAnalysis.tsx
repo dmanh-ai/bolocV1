@@ -27,18 +27,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-
-// Fetch all strategy recommendations
-async function fetchAllRecommendations() {
-  const res = await fetch('/api/analysis?action=screen&strategy=all&top_n=8');
-  return res.json();
-}
-
-// Fetch single stock analysis
-async function fetchStockAnalysis(symbol: string) {
-  const res = await fetch(`/api/analysis?action=analyze&symbol=${symbol}`);
-  return res.json();
-}
+import { screenStocks, analyzeStock } from '@/lib/stock-analyzer';
 
 // Strategy configurations
 const STRATEGY_CONFIG = {
@@ -273,7 +262,7 @@ function StrategySection({
 function StockDetailModal({ symbol, onClose }: { symbol: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['stock-analysis', symbol],
-    queryFn: () => fetchStockAnalysis(symbol),
+    queryFn: () => analyzeStock(symbol),
     enabled: !!symbol,
   });
 
@@ -402,16 +391,12 @@ function StockDetailModal({ symbol, onClose }: { symbol: string; onClose: () => 
                     <div className="font-bold text-lg">{analysis.fundamental.data?.roa?.toFixed(1) || 'N/A'}%</div>
                   </div>
                   <div className="p-3 rounded-lg bg-secondary/50">
-                    <div className="text-sm text-muted-foreground">Current Ratio</div>
-                    <div className="font-bold">{analysis.fundamental.data?.current_ratio?.toFixed(2) || 'N/A'}</div>
+                    <div className="text-sm text-muted-foreground">EPS</div>
+                    <div className="font-bold">{analysis.fundamental.data?.eps?.toFixed(0) || 'N/A'}</div>
                   </div>
                   <div className="p-3 rounded-lg bg-secondary/50">
-                    <div className="text-sm text-muted-foreground">Debt/Equity</div>
-                    <div className="font-bold">{analysis.fundamental.data?.debt_equity?.toFixed(2) || 'N/A'}</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-secondary/50">
-                    <div className="text-sm text-muted-foreground">Net Margin</div>
-                    <div className="font-bold">{analysis.fundamental.data?.net_margin?.toFixed(1) || 'N/A'}%</div>
+                    <div className="text-sm text-muted-foreground">Market Cap</div>
+                    <div className="font-bold">{analysis.fundamental.data?.market_cap ? `${(analysis.fundamental.data.market_cap / 1e9).toFixed(0)}B` : 'N/A'}</div>
                   </div>
                 </div>
               </CardContent>
@@ -429,12 +414,12 @@ export function StockAnalysis() {
   
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['all-recommendations'],
-    queryFn: fetchAllRecommendations,
+    queryFn: () => screenStocks('all', 8),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
   const marketOverview = data?.market_overview;
-  const strategies = data?.strategies;
+  const strategies = data?.strategies as Record<string, StrategyResult> | undefined;
 
   return (
     <div className="space-y-6">

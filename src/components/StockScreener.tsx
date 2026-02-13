@@ -45,18 +45,7 @@ import {
   getSortedRowModel,
   SortingState,
 } from '@tanstack/react-table';
-
-// Fetch stocks list
-async function fetchStocks() {
-  const res = await fetch('/api/stocks?action=list');
-  return res.json();
-}
-
-// Fetch stock ratios
-async function fetchStockRatios(symbol: string) {
-  const res = await fetch(`/api/stocks?action=ratios&symbol=${symbol}&period=quarter`);
-  return res.json();
-}
+import { getStockList, getAllCompanyRatios, getCompanyOverview } from '@/lib/vnstock-api';
 
 // Extended stock type with ratios
 interface StockWithRatios extends Stock {
@@ -75,69 +64,35 @@ export function StockScreener() {
   const [showFilters, setShowFilters] = useState(true);
   const [loadingSymbols, setLoadingSymbols] = useState<Set<string>>(new Set());
 
-  // Fetch stocks list
-  const { data: stocksData, isLoading: isLoadingStocks, refetch } = useQuery({
-    queryKey: ['stocks-list'],
-    queryFn: fetchStocks,
-  });
+  // Fetch stocks with ratios in one go
+  const { data: stocksWithRatios = [], isLoading: isLoadingStocks } = useQuery({
+    queryKey: ['stocks-with-ratios'],
+    queryFn: async () => {
+      const [stockList, allRatios] = await Promise.all([
+        getStockList(),
+        getAllCompanyRatios(),
+      ]);
 
-  // Local state for stocks with ratios
-  const [stocksWithRatios, setStocksWithRatios] = useState<StockWithRatios[]>([]);
-  const [loadedRatios, setLoadedRatios] = useState(false);
-
-  // Load ratios for stocks
-  const loadRatios = async () => {
-    if (!stocksData?.data || loadedRatios) return;
-    
-    setLoadedRatios(true);
-    const stocks: StockWithRatios[] = stocksData.data.map((s: any) => ({
-      symbol: s.symbol,
-      name: s.organ_name || '',
-    }));
-    
-    setStocksWithRatios(stocks);
-    
-    // Load ratios in batches
-    const batchSize = 10;
-    for (let i = 0; i < Math.min(50, stocks.length); i += batchSize) {
-      const batch = stocks.slice(i, i + batchSize);
-      
-      const results = await Promise.all(
-        batch.map(async (stock) => {
-          try {
-            const data = await fetchStockRatios(stock.symbol);
-            return {
-              ...stock,
-              pe: data?.key_metrics?.pe,
-              pb: data?.key_metrics?.pb,
-              roe: data?.key_metrics?.roe,
-              roa: data?.key_metrics?.roa,
-              eps: data?.key_metrics?.eps,
-              marketCap: data?.key_metrics?.market_cap,
-            };
-          } catch {
-            return stock;
-          }
-        })
+      const ratiosMap = new Map(
+        allRatios.map((r) => [r.symbol, r])
       );
-      
-      setStocksWithRatios(prev => {
-        const updated = [...prev];
-        results.forEach((r, idx) => {
-          const existingIdx = updated.findIndex(s => s.symbol === r.symbol);
-          if (existingIdx !== -1) {
-            updated[existingIdx] = r;
-          }
-        });
-        return updated;
-      });
-    }
-  };
 
-  // Start loading ratios when stocks are loaded
-  if (stocksData?.data?.length > 0 && !loadedRatios) {
-    loadRatios();
-  }
+      return stockList.map((s): StockWithRatios => {
+        const ratios = ratiosMap.get(s.symbol);
+        return {
+          symbol: s.symbol,
+          name: '',
+          pe: ratios?.pe,
+          pb: ratios?.pb,
+          roe: ratios?.roe,
+          roa: ratios?.roa,
+          eps: ratios?.eps,
+          marketCap: ratios?.market_cap,
+        };
+      });
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Filter stocks
   const filteredStocks = useMemo(() => {
@@ -444,9 +399,6 @@ export function StockScreener() {
               <CardTitle>Kết quả</CardTitle>
               <CardDescription>
                 Tìm thấy {filteredStocks.length} cổ phiếu
-                {loadedRatios && stocksWithRatios.some(s => s.pe === undefined) && (
-                  <span className="text-yellow-500 ml-2">(đang tải chỉ số...)</span>
-                )}
               </CardDescription>
             </div>
             <Badge variant="secondary">{filteredStocks.length} kết quả</Badge>
