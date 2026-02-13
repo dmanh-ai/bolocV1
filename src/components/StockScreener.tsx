@@ -29,12 +29,9 @@ import {
   SlidersHorizontal,
   RotateCcw,
   Star,
-  TrendingUp,
-  TrendingDown,
-  ChevronUp,
-  ChevronDown,
   ArrowUpDown,
-  Loader2,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -45,9 +42,8 @@ import {
   getSortedRowModel,
   SortingState,
 } from '@tanstack/react-table';
-import { getStockList, getAllCompanyRatios, getCompanyOverview } from '@/lib/vnstock-api';
+import { getStockList, getAllCompanyRatios } from '@/lib/vnstock-api';
 
-// Extended stock type with ratios
 interface StockWithRatios extends Stock {
   pe?: number;
   pb?: number;
@@ -55,190 +51,209 @@ interface StockWithRatios extends Stock {
   roa?: number;
   eps?: number;
   marketCap?: number;
-  isLoading?: boolean;
+  revenue_growth?: number;
+  net_profit_growth?: number;
+  net_profit_margin?: number;
+  gross_margin?: number;
+  current_ratio?: number;
+  de?: number;
+  dividend?: number;
+  exchange?: string;
+}
+
+function FilterSection({ title, open, onToggle, children }: {
+  title: string; open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="border rounded-lg">
+      <button
+        className="w-full flex items-center justify-between p-3 text-sm font-medium hover:bg-secondary/50"
+        onClick={onToggle}
+      >
+        {title}
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+      </button>
+      {open && <div className="p-3 pt-0 grid gap-4 md:grid-cols-2">{children}</div>}
+    </div>
+  );
 }
 
 export function StockScreener() {
-  const { filters, setFilters, resetFilters, addToWatchlist, removeFromWatchlist, isInWatchlist, setSelectedStock, setActiveTab } = useAppStore();
+  const { filters, setFilters, resetFilters, addToWatchlist, removeFromWatchlist, isInWatchlist, setSelectedStock } = useAppStore();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [showFilters, setShowFilters] = useState(true);
-  const [loadingSymbols, setLoadingSymbols] = useState<Set<string>>(new Set());
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    valuation: true, profitability: false, growth: false, solvency: false,
+  });
 
-  // Fetch stocks with ratios in one go
+  const toggleSection = (key: string) => {
+    setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const { data: stocksWithRatios = [], isLoading: isLoadingStocks } = useQuery({
-    queryKey: ['stocks-with-ratios'],
+    queryKey: ['stocks-with-ratios-full'],
     queryFn: async () => {
       const [stockList, allRatios] = await Promise.all([
         getStockList(),
         getAllCompanyRatios(),
       ]);
 
-      const ratiosMap = new Map(
-        allRatios.map((r) => [r.symbol, r])
-      );
+      const ratiosMap = new Map(allRatios.map((r) => [r.symbol, r]));
 
       return stockList.map((s): StockWithRatios => {
-        const ratios = ratiosMap.get(s.symbol);
+        const r = ratiosMap.get(s.symbol);
         return {
           symbol: s.symbol,
           name: '',
-          pe: ratios?.pe,
-          pb: ratios?.pb,
-          roe: ratios?.roe,
-          roa: ratios?.roa,
-          eps: ratios?.eps,
-          marketCap: ratios?.market_cap,
+          exchange: s.exchange,
+          pe: r?.pe,
+          pb: r?.pb,
+          roe: r?.roe,
+          roa: r?.roa,
+          eps: r?.eps,
+          marketCap: r?.market_cap,
+          revenue_growth: r?.revenue_growth,
+          net_profit_growth: r?.net_profit_growth,
+          net_profit_margin: r?.net_profit_margin,
+          gross_margin: r?.gross_margin,
+          current_ratio: r?.current_ratio,
+          de: r?.de,
+          dividend: r?.dividend,
         };
       });
     },
     staleTime: 5 * 60 * 1000,
   });
 
-  // Filter stocks
   const filteredStocks = useMemo(() => {
     if (!stocksWithRatios.length) return [];
-    
-    return stocksWithRatios.filter((stock) => {
-      // Search filter
+
+    return stocksWithRatios.filter((s) => {
       if (filters.searchQuery) {
-        const query = filters.searchQuery.toLowerCase();
-        if (
-          !stock.symbol.toLowerCase().includes(query) &&
-          !stock.name?.toLowerCase().includes(query)
-        ) {
-          return false;
-        }
+        const q = filters.searchQuery.toLowerCase();
+        if (!s.symbol.toLowerCase().includes(q) && !s.name?.toLowerCase().includes(q)) return false;
       }
-      
-      // P/E filter
-      if (stock.pe !== undefined) {
-        if (stock.pe < filters.peMin || stock.pe > filters.peMax) return false;
-      }
-      
-      // P/B filter
-      if (stock.pb !== undefined) {
-        if (stock.pb < filters.pbMin || stock.pb > filters.pbMax) return false;
-      }
-      
-      // ROE filter
-      if (stock.roe !== undefined) {
-        if (stock.roe < filters.roeMin || stock.roe > filters.roeMax) return false;
-      }
-      
+      if (filters.exchange !== 'all' && s.exchange && s.exchange !== filters.exchange) return false;
+      // Valuation
+      if (s.pe !== undefined && (s.pe < filters.peMin || s.pe > filters.peMax)) return false;
+      if (s.pb !== undefined && (s.pb < filters.pbMin || s.pb > filters.pbMax)) return false;
+      // Profitability
+      if (s.roe !== undefined && (s.roe < filters.roeMin || s.roe > filters.roeMax)) return false;
+      if (s.roa !== undefined && (s.roa < filters.roaMin || s.roa > filters.roaMax)) return false;
+      if (s.net_profit_margin !== undefined && (s.net_profit_margin < filters.netMarginMin || s.net_profit_margin > filters.netMarginMax)) return false;
+      if (s.gross_margin !== undefined && (s.gross_margin < filters.grossMarginMin || s.gross_margin > filters.grossMarginMax)) return false;
+      // Growth
+      if (s.revenue_growth !== undefined && (s.revenue_growth < filters.revenueGrowthMin || s.revenue_growth > filters.revenueGrowthMax)) return false;
+      if (s.net_profit_growth !== undefined && (s.net_profit_growth < filters.netProfitGrowthMin || s.net_profit_growth > filters.netProfitGrowthMax)) return false;
+      // Solvency
+      if (s.current_ratio !== undefined && s.current_ratio < filters.currentRatioMin) return false;
+      if (s.de !== undefined && s.de > filters.deMax) return false;
+
       return true;
     });
   }, [stocksWithRatios, filters]);
 
-  // Table columns
   const columns: ColumnDef<StockWithRatios>[] = [
     {
       accessorKey: 'symbol',
       header: ({ column }) => (
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-          className="h-8 px-2"
-        >
-          Mã CP
-          <ArrowUpDown className="ml-1 h-3 w-3" />
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')} className="h-8 px-2">
+          Mã <ArrowUpDown className="ml-1 h-3 w-3" />
         </Button>
       ),
-      cell: ({ row }) => (
-        <div className="font-medium text-green-500">{row.getValue('symbol')}</div>
-      ),
-    },
-    {
-      accessorKey: 'name',
-      header: 'Tên công ty',
-      cell: ({ row }) => (
-        <div className="max-w-[200px] truncate text-muted-foreground">
-          {row.getValue('name') || '---'}
-        </div>
-      ),
+      cell: ({ row }) => <div className="font-medium text-green-500">{row.getValue('symbol')}</div>,
     },
     {
       accessorKey: 'pe',
       header: ({ column }) => (
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-          className="h-8 px-2"
-        >
-          P/E
-          <ArrowUpDown className="ml-1 h-3 w-3" />
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')} className="h-8 px-2">
+          P/E <ArrowUpDown className="ml-1 h-3 w-3" />
         </Button>
       ),
       cell: ({ row }) => {
-        const value = row.getValue('pe') as number;
-        return value !== undefined ? (
-          <Badge variant={value < 15 ? 'default' : value < 25 ? 'secondary' : 'destructive'}>
-            {value.toFixed(1)}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">---</span>
-        );
+        const v = row.getValue('pe') as number;
+        if (v === undefined) return <span className="text-muted-foreground">---</span>;
+        return <Badge variant={v < 15 ? 'default' : v < 25 ? 'secondary' : 'destructive'}>{v.toFixed(1)}</Badge>;
       },
     },
     {
       accessorKey: 'pb',
       header: ({ column }) => (
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-          className="h-8 px-2"
-        >
-          P/B
-          <ArrowUpDown className="ml-1 h-3 w-3" />
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')} className="h-8 px-2">
+          P/B <ArrowUpDown className="ml-1 h-3 w-3" />
         </Button>
       ),
       cell: ({ row }) => {
-        const value = row.getValue('pb') as number;
-        return value !== undefined ? (
-          <Badge variant={value < 1 ? 'default' : value < 3 ? 'secondary' : 'destructive'}>
-            {value.toFixed(2)}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">---</span>
-        );
+        const v = row.getValue('pb') as number;
+        if (v === undefined) return <span className="text-muted-foreground">---</span>;
+        return <Badge variant={v < 1 ? 'default' : v < 3 ? 'secondary' : 'destructive'}>{v.toFixed(2)}</Badge>;
       },
     },
     {
       accessorKey: 'roe',
       header: ({ column }) => (
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-          className="h-8 px-2"
-        >
-          ROE %
-          <ArrowUpDown className="ml-1 h-3 w-3" />
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')} className="h-8 px-2">
+          ROE <ArrowUpDown className="ml-1 h-3 w-3" />
         </Button>
       ),
       cell: ({ row }) => {
-        const value = row.getValue('roe') as number;
-        return value !== undefined ? (
-          <div className={value >= 15 ? 'text-green-500' : value >= 10 ? 'text-yellow-500' : 'text-red-500'}>
-            {value.toFixed(1)}%
-          </div>
-        ) : (
-          <span className="text-muted-foreground">---</span>
-        );
+        const v = row.getValue('roe') as number;
+        if (v === undefined) return <span className="text-muted-foreground">---</span>;
+        return <div className={v >= 15 ? 'text-green-500' : v >= 10 ? 'text-yellow-500' : 'text-red-500'}>{v.toFixed(1)}%</div>;
       },
     },
     {
       accessorKey: 'roa',
-      header: 'ROA %',
+      header: 'ROA',
       cell: ({ row }) => {
-        const value = row.getValue('roa') as number;
-        return value !== undefined ? `${value.toFixed(1)}%` : '---';
+        const v = row.getValue('roa') as number;
+        return v !== undefined ? `${v.toFixed(1)}%` : '---';
       },
     },
     {
       accessorKey: 'eps',
-      header: 'EPS',
+      header: ({ column }) => (
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')} className="h-8 px-2">
+          EPS <ArrowUpDown className="ml-1 h-3 w-3" />
+        </Button>
+      ),
       cell: ({ row }) => {
-        const value = row.getValue('eps') as number;
-        return value !== undefined ? value.toFixed(0) : '---';
+        const v = row.getValue('eps') as number;
+        return v !== undefined ? <span className={v > 0 ? 'text-green-500' : 'text-red-500'}>{v.toFixed(0)}</span> : '---';
+      },
+    },
+    {
+      accessorKey: 'revenue_growth',
+      header: 'DT %',
+      cell: ({ row }) => {
+        const v = row.getValue('revenue_growth') as number;
+        if (v === undefined) return '---';
+        return <span className={v > 0 ? 'text-green-500' : 'text-red-500'}>{v > 0 ? '+' : ''}{v.toFixed(1)}%</span>;
+      },
+    },
+    {
+      accessorKey: 'net_profit_margin',
+      header: 'NPM',
+      cell: ({ row }) => {
+        const v = row.getValue('net_profit_margin') as number;
+        return v !== undefined ? `${v.toFixed(1)}%` : '---';
+      },
+    },
+    {
+      accessorKey: 'current_ratio',
+      header: 'CR',
+      cell: ({ row }) => {
+        const v = row.getValue('current_ratio') as number;
+        return v !== undefined ? v.toFixed(2) : '---';
+      },
+    },
+    {
+      accessorKey: 'de',
+      header: 'D/E',
+      cell: ({ row }) => {
+        const v = row.getValue('de') as number;
+        if (v === undefined) return '---';
+        return <span className={v > 2 ? 'text-red-500' : ''}>{v.toFixed(2)}</span>;
       },
     },
     {
@@ -247,37 +262,14 @@ export function StockScreener() {
       cell: ({ row }) => {
         const stock = row.original;
         const inWatchlist = isInWatchlist(stock.symbol);
-        
         return (
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                setSelectedStock(stock);
-                // Could open detail modal
-              }}
-            >
-              <Search className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                if (inWatchlist) {
-                  removeFromWatchlist(stock.symbol);
-                } else {
-                  addToWatchlist(stock);
-                }
-              }}
-            >
-              <Star
-                className={`h-4 w-4 ${
-                  inWatchlist ? 'text-yellow-500 fill-yellow-500' : 'text-muted-foreground'
-                }`}
-              />
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => inWatchlist ? removeFromWatchlist(stock.symbol) : addToWatchlist(stock)}
+          >
+            <Star className={`h-4 w-4 ${inWatchlist ? 'text-yellow-500 fill-yellow-500' : 'text-muted-foreground'}`} />
+          </Button>
         );
       },
     },
@@ -289,49 +281,38 @@ export function StockScreener() {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     onSortingChange: setSorting,
-    state: {
-      sorting,
-    },
+    state: { sorting },
   });
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Bộ lọc cổ phiếu</h1>
-          <p className="text-muted-foreground">
-            Tìm kiếm và lọc cổ phiếu theo các chỉ số tài chính
-          </p>
+          <p className="text-muted-foreground">Lọc theo chỉ số tài chính, tăng trưởng, thanh khoản</p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => setShowFilters(!showFilters)}
-          className="gap-2"
-        >
+        <Button variant="outline" onClick={() => setShowFilters(!showFilters)} className="gap-2">
           <SlidersHorizontal className="w-4 h-4" />
           {showFilters ? 'Ẩn bộ lọc' : 'Hiện bộ lọc'}
         </Button>
       </div>
 
-      {/* Filters */}
       {showFilters && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>Bộ lọc</CardTitle>
-                <CardDescription>Thiết lập các tiêu chí lọc cổ phiếu</CardDescription>
+                <CardTitle>Bộ lọc nâng cao</CardTitle>
+                <CardDescription>Lọc theo nhiều tiêu chí tài chính</CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={resetFilters} className="gap-2">
-                <RotateCcw className="w-4 h-4" />
-                Đặt lại
+                <RotateCcw className="w-4 h-4" /> Đặt lại
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-              {/* Search */}
+          <CardContent className="space-y-3">
+            {/* Search + Exchange */}
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label>Tìm kiếm</Label>
                 <div className="relative">
@@ -344,49 +325,77 @@ export function StockScreener() {
                   />
                 </div>
               </div>
-
-              {/* P/E Filter */}
               <div className="space-y-2">
-                <Label>
-                  P/E Ratio: {filters.peMin} - {filters.peMax}
-                </Label>
-                <Slider
-                  value={[filters.peMin, filters.peMax]}
-                  min={0}
-                  max={100}
-                  step={1}
-                  onValueChange={([min, max]) => setFilters({ peMin: min, peMax: max })}
-                />
-              </div>
-
-              {/* P/B Filter */}
-              <div className="space-y-2">
-                <Label>
-                  P/B Ratio: {filters.pbMin} - {filters.pbMax}
-                </Label>
-                <Slider
-                  value={[filters.pbMin, filters.pbMax]}
-                  min={0}
-                  max={20}
-                  step={0.5}
-                  onValueChange={([min, max]) => setFilters({ pbMin: min, pbMax: max })}
-                />
-              </div>
-
-              {/* ROE Filter */}
-              <div className="space-y-2">
-                <Label>
-                  ROE %: {filters.roeMin}% - {filters.roeMax}%
-                </Label>
-                <Slider
-                  value={[filters.roeMin, filters.roeMax]}
-                  min={0}
-                  max={100}
-                  step={1}
-                  onValueChange={([min, max]) => setFilters({ roeMin: min, roeMax: max })}
-                />
+                <Label>Sàn giao dịch</Label>
+                <Select value={filters.exchange} onValueChange={(v) => setFilters({ exchange: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tất cả" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tất cả</SelectItem>
+                    <SelectItem value="HOSE">HOSE</SelectItem>
+                    <SelectItem value="HNX">HNX</SelectItem>
+                    <SelectItem value="UPCOM">UPCOM</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
+
+            {/* Valuation */}
+            <FilterSection title="Định giá (P/E, P/B)" open={openSections.valuation} onToggle={() => toggleSection('valuation')}>
+              <div className="space-y-2">
+                <Label>P/E: {filters.peMin} - {filters.peMax}</Label>
+                <Slider value={[filters.peMin, filters.peMax]} min={0} max={100} step={1} onValueChange={([min, max]) => setFilters({ peMin: min, peMax: max })} />
+              </div>
+              <div className="space-y-2">
+                <Label>P/B: {filters.pbMin} - {filters.pbMax}</Label>
+                <Slider value={[filters.pbMin, filters.pbMax]} min={0} max={20} step={0.5} onValueChange={([min, max]) => setFilters({ pbMin: min, pbMax: max })} />
+              </div>
+            </FilterSection>
+
+            {/* Profitability */}
+            <FilterSection title="Lợi nhuận (ROE, ROA, Biên LN)" open={openSections.profitability} onToggle={() => toggleSection('profitability')}>
+              <div className="space-y-2">
+                <Label>ROE: {filters.roeMin}% - {filters.roeMax}%</Label>
+                <Slider value={[filters.roeMin, filters.roeMax]} min={0} max={100} step={1} onValueChange={([min, max]) => setFilters({ roeMin: min, roeMax: max })} />
+              </div>
+              <div className="space-y-2">
+                <Label>ROA: {filters.roaMin}% - {filters.roaMax}%</Label>
+                <Slider value={[filters.roaMin, filters.roaMax]} min={0} max={50} step={1} onValueChange={([min, max]) => setFilters({ roaMin: min, roaMax: max })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Biên LN ròng: {filters.netMarginMin}% - {filters.netMarginMax}%</Label>
+                <Slider value={[filters.netMarginMin, filters.netMarginMax]} min={-50} max={100} step={1} onValueChange={([min, max]) => setFilters({ netMarginMin: min, netMarginMax: max })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Biên gộp: {filters.grossMarginMin}% - {filters.grossMarginMax}%</Label>
+                <Slider value={[filters.grossMarginMin, filters.grossMarginMax]} min={0} max={100} step={1} onValueChange={([min, max]) => setFilters({ grossMarginMin: min, grossMarginMax: max })} />
+              </div>
+            </FilterSection>
+
+            {/* Growth */}
+            <FilterSection title="Tăng trưởng (Doanh thu, Lợi nhuận)" open={openSections.growth} onToggle={() => toggleSection('growth')}>
+              <div className="space-y-2">
+                <Label>Tăng trưởng DT: {filters.revenueGrowthMin}% - {filters.revenueGrowthMax}%</Label>
+                <Slider value={[filters.revenueGrowthMin, filters.revenueGrowthMax]} min={-100} max={500} step={5} onValueChange={([min, max]) => setFilters({ revenueGrowthMin: min, revenueGrowthMax: max })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Tăng trưởng LN: {filters.netProfitGrowthMin}% - {filters.netProfitGrowthMax}%</Label>
+                <Slider value={[filters.netProfitGrowthMin, filters.netProfitGrowthMax]} min={-100} max={500} step={5} onValueChange={([min, max]) => setFilters({ netProfitGrowthMin: min, netProfitGrowthMax: max })} />
+              </div>
+            </FilterSection>
+
+            {/* Solvency */}
+            <FilterSection title="Thanh khoản & Đòn bẩy (CR, D/E)" open={openSections.solvency} onToggle={() => toggleSection('solvency')}>
+              <div className="space-y-2">
+                <Label>Current Ratio tối thiểu: {filters.currentRatioMin}</Label>
+                <Slider value={[filters.currentRatioMin]} min={0} max={5} step={0.1} onValueChange={([v]) => setFilters({ currentRatioMin: v })} />
+              </div>
+              <div className="space-y-2">
+                <Label>D/E tối đa: {filters.deMax}</Label>
+                <Slider value={[filters.deMax]} min={0} max={10} step={0.5} onValueChange={([v]) => setFilters({ deMax: v })} />
+              </div>
+            </FilterSection>
           </CardContent>
         </Card>
       )}
@@ -397,9 +406,7 @@ export function StockScreener() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Kết quả</CardTitle>
-              <CardDescription>
-                Tìm thấy {filteredStocks.length} cổ phiếu
-              </CardDescription>
+              <CardDescription>Tìm thấy {filteredStocks.length} cổ phiếu</CardDescription>
             </div>
             <Badge variant="secondary">{filteredStocks.length} kết quả</Badge>
           </div>
@@ -410,7 +417,7 @@ export function StockScreener() {
               {[...Array(5)].map((_, i) => (
                 <div key={i} className="flex gap-4">
                   <Skeleton className="h-8 w-20" />
-                  <Skeleton className="h-8 w-40" />
+                  <Skeleton className="h-8 w-16" />
                   <Skeleton className="h-8 w-16" />
                   <Skeleton className="h-8 w-16" />
                   <Skeleton className="h-8 w-16" />
@@ -418,19 +425,14 @@ export function StockScreener() {
               ))}
             </div>
           ) : (
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   {table.getHeaderGroups().map((headerGroup) => (
                     <TableRow key={headerGroup.id}>
                       {headerGroup.headers.map((header) => (
                         <TableHead key={header.id}>
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext()
-                              )}
+                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                         </TableHead>
                       ))}
                     </TableRow>
@@ -439,11 +441,7 @@ export function StockScreener() {
                 <TableBody>
                   {table.getRowModel().rows?.length ? (
                     table.getRowModel().rows.map((row) => (
-                      <TableRow
-                        key={row.id}
-                        data-state={row.getIsSelected() && 'selected'}
-                        className="cursor-pointer hover:bg-secondary/50"
-                      >
+                      <TableRow key={row.id} className="cursor-pointer hover:bg-secondary/50">
                         {row.getVisibleCells().map((cell) => (
                           <TableCell key={cell.id}>
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}

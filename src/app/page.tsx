@@ -2,7 +2,6 @@
 
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
-import { Dashboard } from "@/components/Dashboard";
 import { StockScreener } from "@/components/StockScreener";
 import { Watchlist } from "@/components/Watchlist";
 import { MarketOverview } from "@/components/MarketOverview";
@@ -23,11 +22,10 @@ function MainContent() {
       <Header />
 
       <main className="p-4 lg:p-6">
-        {activeTab === "dashboard" && <Dashboard />}
+        {activeTab === "market" && <MarketOverview />}
         {activeTab === "analysis" && <StockAnalysis />}
         {activeTab === "screener" && <StockScreener />}
         {activeTab === "watchlist" && <Watchlist />}
-        {activeTab === "market" && <MarketOverview />}
       </main>
     </div>
   );
