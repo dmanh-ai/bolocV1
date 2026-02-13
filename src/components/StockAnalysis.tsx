@@ -495,6 +495,111 @@ export function StockAnalysis() {
           </TabsContent>
         </Tabs>
       )}
+
+      {/* ========= GUIDE ========= */}
+      <Guide />
+    </div>
+  );
+}
+
+// ==================== GUIDE SECTION ====================
+
+const GUIDE_ITEMS = [
+  {
+    term: "Regime",
+    desc: "Trạng thái thị trường chung (Bull / Neutral / Bear) dựa trên VN-Index vs MA50 & MA200, breadth, và momentum.",
+  },
+  {
+    term: "Allocation",
+    desc: "Mức phân bổ vốn khuyến nghị theo Regime: Bull 80-100%, Neutral 40-60%, Bear 0-20%.",
+  },
+  {
+    term: "Tier",
+    desc: "Phân hạng entry: Tier 1A (PRIME + SYNC + Entry State) = tối ưu, Tier 2A (VALID+ + Entry + MTF≠WEAK) = chấp nhận.",
+  },
+  {
+    term: "QTier (Grade)",
+    desc: "Chất lượng cơ bản: PRIME (ROE cao, tăng trưởng tốt, P/E hợp lý), VALID (đạt yêu cầu), WATCH (theo dõi).",
+  },
+  {
+    term: "State",
+    desc: "Trạng thái kỹ thuật: BREAKOUT (phá đỉnh + volume), CONFIRM (xác nhận), RETEST (hồi về MA), TREND (xu hướng), BASE (tích lũy).",
+  },
+  {
+    term: "TrendPath (TPaths)",
+    desc: "Đường xu hướng: S_MAJOR (C>MA20>MA50>MA200 = mạnh nhất), MAJOR, MINOR, WEAK.",
+  },
+  {
+    term: "MTF (Multi-Timeframe)",
+    desc: "Đồng thuận đa khung: SYNC (trên cả MA20, MA50, MA200), PARTIAL (2/3), WEAK.",
+  },
+  {
+    term: "MI (Momentum Index)",
+    desc: "Chỉ số momentum 0-100 tổng hợp từ RSI, MACD, Trend, Volume. Phase: PEAK > HIGH > MID > LOW.",
+  },
+  {
+    term: "RS (Relative Strength)",
+    desc: "Sức mạnh tương đối vs VN-Index qua 20/50/200 phiên. RS% > 0 = outperform thị trường.",
+  },
+  {
+    term: "Vector",
+    desc: "Hướng RS: SYNC (cả 3 TF outperform), D_LEAD (Daily dẫn), M_LEAD (Monthly dẫn), NEUT (trung tính).",
+  },
+  {
+    term: "Bucket",
+    desc: "Phân nhóm RS: PRIME (≥85) > ELITE (≥75) > CORE (≥60) > QUALITY (≥50) > WEAK.",
+  },
+  {
+    term: "GTGD",
+    desc: "Giá trị giao dịch trung bình 5 phiên (tỷ VND). Đo thanh khoản thực tế.",
+  },
+  {
+    term: "Rank",
+    desc: "Điểm tổng hợp TO: QTier + MI*5 + TrendPath bonus + MTF bonus + State bonus. Rank cao = setup tốt hơn.",
+  },
+  {
+    term: "RQS (Retest Quality)",
+    desc: "Chất lượng pullback 0-100: gần MA20, volume giảm, RSI vùng 40-55, giữ trên MA50 = pullback khoẻ.",
+  },
+];
+
+function Guide() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 overflow-hidden mt-6">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-zinc-900/50 hover:bg-zinc-800/30 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />}
+          <span className="font-bold text-sm text-zinc-300">Huong dan su dung (Guide)</span>
+        </div>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {GUIDE_ITEMS.map((item) => (
+              <div key={item.term} className="flex gap-2 text-xs">
+                <span className="font-bold text-amber-400 whitespace-nowrap min-w-[80px]">{item.term}</span>
+                <span className="text-zinc-400">{item.desc}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 pt-3 border-t border-zinc-800 space-y-1.5">
+            <p className="text-xs text-zinc-500">
+              <span className="text-zinc-400 font-semibold">Cach dung:</span> Tab TO Best Setups de tim diem entry ky thuat tot nhat. Tab RS Best Setups de tim co phieu manh hon thi truong.
+            </p>
+            <p className="text-xs text-zinc-500">
+              <span className="text-zinc-400 font-semibold">Uu tien:</span> Tier 1A &gt; Tier 2A &gt; Fresh Breakout &gt; Quality Retest &gt; S_MAJOR TREND &gt; Pipeline.
+            </p>
+            <p className="text-xs text-zinc-500">
+              <span className="text-zinc-400 font-semibold">Luu y:</span> Du lieu duoc lay tu repo vnstock (CSV). Ket qua mang tinh tham khao, khong phai khuyen nghi dau tu.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
