@@ -11,6 +11,10 @@ import {
   Activity,
   Zap,
   Clock,
+  BarChart3,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useMemo } from 'react';
@@ -31,6 +35,9 @@ import {
   type RSState,
   type RSVector,
   type RSBucket,
+  type MarketRegime,
+  type RegimeState,
+  type RegimeLayer,
 } from '@/lib/stock-analyzer';
 
 // ==================== BADGE COLOR MAPS ====================
@@ -350,6 +357,265 @@ function StatCard({ label, value, color }: { label: string; value: number | stri
   );
 }
 
+// ==================== REGIME COLORS ====================
+
+const REGIME_COLORS: Record<RegimeState, string> = {
+  BULL: 'bg-green-500 text-white',
+  NEUTRAL: 'bg-amber-500 text-white',
+  BEAR: 'bg-red-500 text-white',
+};
+
+const REGIME_BG: Record<RegimeState, string> = {
+  BULL: 'bg-green-500/10 border-green-500/30',
+  NEUTRAL: 'bg-amber-500/10 border-amber-500/30',
+  BEAR: 'bg-red-500/10 border-red-500/30',
+};
+
+const REGIME_TEXT: Record<RegimeState, string> = {
+  BULL: 'text-green-400',
+  NEUTRAL: 'text-amber-400',
+  BEAR: 'text-red-400',
+};
+
+const REGIME_ICON: Record<RegimeState, typeof TrendingUp> = {
+  BULL: TrendingUp,
+  NEUTRAL: Minus,
+  BEAR: TrendingDown,
+};
+
+// ==================== REGIME SCORE BAR ====================
+
+function RegimeScoreBar({ score, label }: { score: number; label?: string }) {
+  // score is -100 to +100, map to 0-100 for display
+  const pct = Math.round((score + 100) / 2);
+  const color = score >= 25 ? 'bg-green-500' : score <= -25 ? 'bg-red-500' : 'bg-amber-500';
+  return (
+    <div className="space-y-1">
+      {label && <span className="text-[10px] text-zinc-500 uppercase tracking-wider">{label}</span>}
+      <div className="flex items-center gap-2">
+        <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden relative">
+          {/* Center marker */}
+          <div className="absolute left-1/2 top-0 bottom-0 w-px bg-zinc-600 z-10" />
+          <div
+            className={`h-full rounded-full ${color} transition-all`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className={`text-xs font-mono font-bold min-w-[36px] text-right ${score >= 25 ? 'text-green-400' : score <= -25 ? 'text-red-400' : 'text-amber-400'}`}>
+          {score > 0 ? '+' : ''}{score}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ==================== LAYER CARD ====================
+
+function LayerCard({ layer, num: layerNum }: { layer: RegimeLayer; num: number }) {
+  const Icon = REGIME_ICON[layer.signal];
+  return (
+    <div className={`rounded-lg border p-4 space-y-3 ${REGIME_BG[layer.signal]}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800 rounded px-1.5 py-0.5">L{layerNum}</span>
+          <span className="font-bold text-sm text-zinc-100">{layer.label}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold ${REGIME_COLORS[layer.signal]}`}>
+            <Icon className="w-3 h-3" />
+            {layer.signal}
+          </span>
+        </div>
+      </div>
+      <RegimeScoreBar score={layer.score} />
+      <div className="space-y-1">
+        {layer.details.slice(0, 4).map((d, i) => (
+          <p key={i} className="text-[11px] text-zinc-400">{d}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ==================== MARKET REGIME PANEL ====================
+
+function MarketRegimePanel({ regime }: { regime: MarketRegime }) {
+  const Icon = REGIME_ICON[regime.regime];
+  return (
+    <div className="space-y-4">
+      {/* Overall Regime Assessment */}
+      <div className={`rounded-xl border-2 p-5 ${REGIME_BG[regime.regime]}`}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-bold text-zinc-100">Market Regime Assessment</h3>
+            <p className="text-xs text-zinc-500">4-Layer Framework V5.3</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-lg font-black ${REGIME_COLORS[regime.regime]}`}>
+              <Icon className="w-5 h-5" />
+              {regime.regime}
+            </span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <div className="text-center p-2 rounded-lg bg-zinc-900/50">
+            <span className="text-[10px] text-zinc-500 uppercase">Overall Score</span>
+            <p className={`text-xl font-bold font-mono ${REGIME_TEXT[regime.regime]}`}>
+              {regime.score > 0 ? '+' : ''}{regime.score}
+            </p>
+          </div>
+          <div className="text-center p-2 rounded-lg bg-zinc-900/50">
+            <span className="text-[10px] text-zinc-500 uppercase">Allocation</span>
+            <p className={`text-xl font-bold font-mono ${REGIME_TEXT[regime.regime]}`}>{regime.allocation}</p>
+          </div>
+          <div className="text-center p-2 rounded-lg bg-zinc-900/50 col-span-2">
+            <span className="text-[10px] text-zinc-500 uppercase">Guideline</span>
+            <p className="text-sm text-zinc-300 mt-0.5">{regime.allocDesc}</p>
+          </div>
+        </div>
+        <RegimeScoreBar score={regime.score} label="Overall" />
+      </div>
+
+      {/* 4-Layer Framework */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <LayerCard layer={regime.indexLayer} num={1} />
+        <LayerCard layer={regime.breadthLayer} num={2} />
+        <LayerCard layer={regime.momentumLayer} num={3} />
+        <LayerCard layer={regime.flowLayer} num={4} />
+      </div>
+
+      {/* Index Overview */}
+      <div className="rounded-lg border border-zinc-800 p-4">
+        <h4 className="font-bold text-sm text-zinc-200 mb-3">Index Overview - VN-Index</h4>
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">VN-Index</span>
+            <span className="text-base font-bold font-mono text-zinc-100">{regime.indexLayer.vnindex.toLocaleString('en', { maximumFractionDigits: 1 })}</span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">Change</span>
+            <span className={`text-base font-bold font-mono ${regime.indexLayer.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.indexLayer.changePct >= 0 ? '+' : ''}{regime.indexLayer.changePct.toFixed(2)}%
+            </span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">SMA 20</span>
+            <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma20 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.indexLayer.sma20.toLocaleString('en', { maximumFractionDigits: 1 })}
+            </span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">SMA 50</span>
+            <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma50 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.indexLayer.sma50.toLocaleString('en', { maximumFractionDigits: 1 })}
+            </span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">SMA 200</span>
+            <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma200 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.indexLayer.sma200.toLocaleString('en', { maximumFractionDigits: 1 })}
+            </span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">RSI 14</span>
+            <span className={`text-sm font-mono ${regime.indexLayer.rsi >= 50 ? 'text-green-400' : regime.indexLayer.rsi <= 30 ? 'text-red-400' : 'text-amber-400'}`}>
+              {regime.indexLayer.rsi.toFixed(1)}
+            </span>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-[10px] text-zinc-500">Trend:</span>
+          <span className={`text-xs font-bold ${
+            regime.indexLayer.trend === 'Uptrend' ? 'text-green-400' :
+            regime.indexLayer.trend === 'Downtrend' ? 'text-red-400' : 'text-amber-400'
+          }`}>{regime.indexLayer.trend}</span>
+          <span className="text-[10px] text-zinc-500 ml-3">MACD:</span>
+          <span className={`text-xs font-mono ${regime.indexLayer.macd > regime.indexLayer.macdSignal ? 'text-green-400' : 'text-red-400'}`}>
+            {regime.indexLayer.macd.toFixed(2)}
+          </span>
+        </div>
+      </div>
+
+      {/* Breadth Analysis */}
+      <div className="rounded-lg border border-zinc-800 p-4">
+        <h4 className="font-bold text-sm text-zinc-200 mb-3">Breadth Analysis</h4>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">Advancing</span>
+            <span className="text-base font-bold font-mono text-green-400">{regime.breadthLayer.advancing}</span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">Declining</span>
+            <span className="text-base font-bold font-mono text-red-400">{regime.breadthLayer.declining}</span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">Unchanged</span>
+            <span className="text-base font-bold font-mono text-zinc-400">{regime.breadthLayer.unchanged}</span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">A/D Ratio</span>
+            <span className={`text-base font-bold font-mono ${regime.breadthLayer.adRatio >= 1 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.breadthLayer.adRatio.toFixed(2)}
+            </span>
+          </div>
+          <div className="text-center">
+            <span className="text-[10px] text-zinc-500 uppercase block">Net A/D</span>
+            <span className={`text-base font-bold font-mono ${regime.breadthLayer.netAD >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {regime.breadthLayer.netAD > 0 ? '+' : ''}{regime.breadthLayer.netAD}
+            </span>
+          </div>
+        </div>
+        {/* Visual AD bar */}
+        <div className="mt-3">
+          <div className="flex h-3 rounded-full overflow-hidden bg-zinc-800">
+            {(regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged) > 0 && (
+              <>
+                <div
+                  className="bg-green-500 transition-all"
+                  style={{ width: `${(regime.breadthLayer.advancing / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
+                />
+                <div
+                  className="bg-zinc-500 transition-all"
+                  style={{ width: `${(regime.breadthLayer.unchanged / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
+                />
+                <div
+                  className="bg-red-500 transition-all"
+                  style={{ width: `${(regime.breadthLayer.declining / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Allocation Guidelines */}
+      <div className="rounded-lg border border-zinc-800 p-4">
+        <h4 className="font-bold text-sm text-zinc-200 mb-3">Allocation Guidelines</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {[
+            { regime: 'BULL' as RegimeState, alloc: '80-100%', desc: 'Full exposure. Tier 1A/2A entries. Hold trends.' },
+            { regime: 'NEUTRAL' as RegimeState, alloc: '40-60%', desc: 'Selective. Only Tier 1A. Reduce size.' },
+            { regime: 'BEAR' as RegimeState, alloc: '0-20%', desc: 'Defensive. No new entries. Wait for recovery.' },
+          ].map((g) => (
+            <div
+              key={g.regime}
+              className={`rounded-lg border p-3 ${regime.regime === g.regime ? REGIME_BG[g.regime] + ' ring-1 ring-offset-0' : 'border-zinc-800 opacity-50'}`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${REGIME_COLORS[g.regime]}`}>
+                  {g.regime}
+                </span>
+                <span className="text-sm font-bold font-mono text-zinc-200">{g.alloc}</span>
+              </div>
+              <p className="text-[11px] text-zinc-400">{g.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== LOADING SKELETON ====================
 
 function AnalysisLoading() {
@@ -413,8 +679,18 @@ export function StockAnalysis() {
       {isLoading || !data ? (
         <AnalysisLoading />
       ) : (
-        <Tabs defaultValue="to" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-2 h-auto p-1 bg-zinc-900 border border-zinc-800">
+        <Tabs defaultValue="regime" className="space-y-4">
+          <TabsList className="grid w-full grid-cols-3 h-auto p-1 bg-zinc-900 border border-zinc-800">
+            <TabsTrigger
+              value="regime"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="font-bold text-sm">Market Regime</span>
+              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ml-1 ${REGIME_COLORS[data.regime.regime]}`}>
+                {data.regime.regime}
+              </span>
+            </TabsTrigger>
             <TabsTrigger
               value="to"
               className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
@@ -436,6 +712,11 @@ export function StockAnalysis() {
               </Badge>
             </TabsTrigger>
           </TabsList>
+
+          {/* ========= MARKET REGIME TAB ========= */}
+          <TabsContent value="regime" className="space-y-4">
+            <MarketRegimePanel regime={data.regime} />
+          </TabsContent>
 
           {/* ========= TO TAB ========= */}
           <TabsContent value="to" className="space-y-4">
