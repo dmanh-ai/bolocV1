@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NavigationPage } from "@/types/stock";
 import {
-  LayoutDashboard,
   Search,
   Star,
   TrendingUp,
@@ -17,12 +16,11 @@ import {
   Target,
 } from "lucide-react";
 
-const navItems: { id: NavigationPage; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+const navItems: { id: NavigationPage; label: string; icon: typeof Search }[] = [
+  { id: "market", label: "Thị trường", icon: TrendingUp },
   { id: "analysis", label: "Phân tích & Chiến lược", icon: Target },
   { id: "screener", label: "Bộ lọc cổ phiếu", icon: Search },
   { id: "watchlist", label: "Watchlist", icon: Star },
-  { id: "market", label: "Thị trường", icon: TrendingUp },
 ];
 
 export function Sidebar() {

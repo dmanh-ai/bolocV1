@@ -15,15 +15,36 @@ export interface Stock {
 }
 
 export interface FilterState {
+  searchQuery: string;
+  exchange: string;
+  sector: string;
+  // Valuation
   peMin: number;
   peMax: number;
   pbMin: number;
   pbMax: number;
+  // Profitability
   roeMin: number;
   roeMax: number;
+  roaMin: number;
+  roaMax: number;
+  netMarginMin: number;
+  netMarginMax: number;
+  grossMarginMin: number;
+  grossMarginMax: number;
+  // Growth
+  revenueGrowthMin: number;
+  revenueGrowthMax: number;
+  netProfitGrowthMin: number;
+  netProfitGrowthMax: number;
+  // Solvency
+  currentRatioMin: number;
+  deMax: number;
+  // Technical
+  rsiMin: number;
+  rsiMax: number;
+  // Size
   marketCap: "all" | "small" | "mid" | "large";
-  sector: string;
-  searchQuery: string;
 }
 
 interface AppState {
@@ -53,22 +74,37 @@ interface AppState {
 }
 
 const defaultFilters: FilterState = {
+  searchQuery: "",
+  exchange: "all",
+  sector: "All",
   peMin: 0,
   peMax: 100,
   pbMin: 0,
   pbMax: 20,
   roeMin: 0,
   roeMax: 100,
+  roaMin: 0,
+  roaMax: 50,
+  netMarginMin: -50,
+  netMarginMax: 100,
+  grossMarginMin: 0,
+  grossMarginMax: 100,
+  revenueGrowthMin: -100,
+  revenueGrowthMax: 500,
+  netProfitGrowthMin: -100,
+  netProfitGrowthMax: 500,
+  currentRatioMin: 0,
+  deMax: 10,
+  rsiMin: 0,
+  rsiMax: 100,
   marketCap: "all",
-  sector: "All",
-  searchQuery: "",
 };
 
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       // Navigation
-      activeTab: "dashboard",
+      activeTab: "market",
       setActiveTab: (tab) => set({ activeTab: tab }),
 
       // Watchlist

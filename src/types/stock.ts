@@ -70,7 +70,6 @@ export interface WatchlistItem {
 }
 
 export type NavigationPage =
-  | "dashboard"
   | "screener"
   | "watchlist"
   | "market"

@@ -232,14 +232,89 @@ export async function getCompanyOverview(
 
 export interface CompanyRatios {
   symbol: string;
+  year_report?: number;
+  length_report?: number;
+  // Valuation
   pe?: number;
   pb?: number;
-  roe?: number;
-  roa?: number;
+  ps?: number;
+  pcf?: number;
   eps?: number;
+  eps_ttm?: number;
   bvps?: number;
+  ev?: number;
+  ev_per_ebitda?: number;
   market_cap?: number;
-  [key: string]: string | number | undefined;
+  // Profitability
+  revenue?: number;
+  revenue_growth?: number;
+  net_profit?: number;
+  net_profit_growth?: number;
+  gross_margin?: number;
+  net_profit_margin?: number;
+  ebit_margin?: number;
+  ebitda?: number;
+  ebit?: number;
+  roe?: number;
+  roic?: number;
+  roa?: number;
+  // Liquidity
+  current_ratio?: number;
+  quick_ratio?: number;
+  cash_ratio?: number;
+  // Leverage
+  de?: number;
+  le?: number;
+  interest_coverage?: number;
+  // Efficiency
+  at?: number;
+  fat?: number;
+  // Dividend
+  dividend?: number;
+  // Other
+  issue_share?: number;
+  charter_capital?: number;
+}
+
+function parseRatiosRow(row: Record<string, string>): CompanyRatios {
+  return {
+    symbol: (row.symbol || row.ticker || "").toUpperCase(),
+    year_report: num(row.year_report),
+    length_report: num(row.length_report),
+    pe: num(row.pe),
+    pb: num(row.pb),
+    ps: num(row.ps),
+    pcf: num(row.pcf),
+    eps: num(row.eps),
+    eps_ttm: num(row.eps_ttm),
+    bvps: num(row.bvps),
+    ev: num(row.ev),
+    ev_per_ebitda: num(row.ev_per_ebitda),
+    market_cap: num(row.market_cap),
+    revenue: num(row.revenue),
+    revenue_growth: num(row.revenue_growth),
+    net_profit: num(row.net_profit),
+    net_profit_growth: num(row.net_profit_growth),
+    gross_margin: num(row.gross_margin),
+    net_profit_margin: num(row.net_profit_margin),
+    ebit_margin: num(row.ebit_margin),
+    ebitda: num(row.ebitda),
+    ebit: num(row.ebit),
+    roe: num(row.roe),
+    roic: num(row.roic),
+    roa: num(row.roa),
+    current_ratio: num(row.current_ratio),
+    quick_ratio: num(row.quick_ratio),
+    cash_ratio: num(row.cash_ratio),
+    de: num(row.de),
+    le: num(row.le),
+    interest_coverage: num(row.interest_coverage),
+    at: num(row.at),
+    fat: num(row.fat),
+    dividend: num(row.dividend),
+    issue_share: num(row.issue_share),
+    charter_capital: num(row.charter_capital),
+  };
 }
 
 export async function getCompanyRatios(
@@ -251,34 +326,12 @@ export async function getCompanyRatios(
       (r.symbol || r.ticker || "").toUpperCase() === symbol.toUpperCase()
   );
   if (!found) return null;
-  return {
-    symbol: symbol.toUpperCase(),
-    pe: num(found.pe || found.PE || found.price_to_earning),
-    pb: num(found.pb || found.PB || found.price_to_book),
-    roe: num(found.roe || found.ROE || found.return_on_equity),
-    roa: num(found.roa || found.ROA || found.return_on_asset),
-    eps: num(found.eps || found.EPS || found.earning_per_share),
-    bvps: num(found.bvps || found.BVPS || found.book_value_per_share),
-    market_cap: num(
-      found.market_cap || found.MarketCap || found.market_capitalization
-    ),
-  };
+  return parseRatiosRow(found);
 }
 
 export async function getAllCompanyRatios(): Promise<CompanyRatios[]> {
   const data = await fetchCSV("company_ratios.csv");
-  return data.map((row) => ({
-    symbol: (row.symbol || row.ticker || "").toUpperCase(),
-    pe: num(row.pe || row.PE || row.price_to_earning),
-    pb: num(row.pb || row.PB || row.price_to_book),
-    roe: num(row.roe || row.ROE || row.return_on_equity),
-    roa: num(row.roa || row.ROA || row.return_on_asset),
-    eps: num(row.eps || row.EPS || row.earning_per_share),
-    bvps: num(row.bvps || row.BVPS || row.book_value_per_share),
-    market_cap: num(
-      row.market_cap || row.MarketCap || row.market_capitalization
-    ),
-  }));
+  return data.map(parseRatiosRow);
 }
 
 // --------------- Financial Statements ---------------
