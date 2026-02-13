@@ -454,8 +454,16 @@ export interface IndexData {
   volume: number;
   symbol: string;
   sma_20?: number;
+  sma_50?: number;
+  sma_200?: number;
   rsi_14?: number;
+  macd?: number;
+  macd_signal?: number;
+  macd_hist?: number;
+  bb_upper?: number;
+  bb_lower?: number;
   daily_return?: number;
+  volatility_20d?: number;
 }
 
 export async function getIndexHistory(
@@ -471,8 +479,16 @@ export async function getIndexHistory(
     volume: num(row.volume) ?? 0,
     symbol: row.symbol || indexName,
     sma_20: num(row.sma_20),
+    sma_50: num(row.sma_50),
+    sma_200: num(row.sma_200),
     rsi_14: num(row.rsi_14),
+    macd: num(row.macd),
+    macd_signal: num(row.macd_signal),
+    macd_hist: num(row.macd_hist),
+    bb_upper: num(row.bb_upper),
+    bb_lower: num(row.bb_lower),
     daily_return: num(row.daily_return),
+    volatility_20d: num(row.volatility_20d),
   }));
 }
 

@@ -14,8 +14,13 @@ import {
   getAllCompanyRatios,
   getStockList,
   getIndexHistory,
+  getMarketBreadth,
+  getForeignFlow,
   type StockOHLCV,
   type CompanyRatios,
+  type IndexData,
+  type MarketBreadth,
+  type ForeignFlow,
 } from "./vnstock-api";
 
 // ==================== TYPES ====================
@@ -28,6 +33,53 @@ export type MIPhase = "PEAK" | "HIGH" | "MID" | "LOW";
 export type RSState = "Leading" | "Improving" | "Neutral" | "Weakening" | "Declining";
 export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "NEUT";
 export type RSBucket = "PRIME" | "ELITE" | "CORE" | "QUALITY" | "WEAK";
+
+export type RegimeState = "BULL" | "NEUTRAL" | "BEAR";
+
+export interface RegimeLayer {
+  score: number;    // -100 to +100
+  signal: RegimeState;
+  label: string;
+  details: string[];
+}
+
+export interface MarketRegime {
+  regime: RegimeState;
+  score: number;        // -100 to +100
+  allocation: string;   // "80-100%" etc.
+  allocDesc: string;
+  indexLayer: RegimeLayer & {
+    vnindex: number;
+    change: number;
+    changePct: number;
+    sma20: number;
+    sma50: number;
+    sma200: number;
+    rsi: number;
+    macd: number;
+    macdSignal: number;
+    trend: string;
+  };
+  breadthLayer: RegimeLayer & {
+    advancing: number;
+    declining: number;
+    unchanged: number;
+    adRatio: number;
+    netAD: number;
+  };
+  momentumLayer: RegimeLayer & {
+    primeCount: number;
+    validCount: number;
+    breakoutCount: number;
+    trendCount: number;
+    avgMI: number;
+  };
+  flowLayer: RegimeLayer & {
+    foreignNetValue: number;
+    foreignNetVolume: number;
+    flowBias: string;
+  };
+}
 
 export interface TOStock {
   symbol: string;
@@ -91,6 +143,7 @@ export interface AnalysisResult {
     dLead: number;
     mLead: number;
   };
+  regime: MarketRegime;
   generatedAt: string;
 }
 
@@ -185,6 +238,7 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
   const c = l.close;
   const m20 = l.sma_20 ?? c;
   const m50 = l.sma_50 ?? c;
+  const m200 = l.sma_200 ?? c;
   const bbU = l.bb_upper ?? c * 1.02;
   const bbL = l.bb_lower ?? c * 0.98;
 
@@ -213,25 +267,31 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
   rqs = Math.min(100, Math.max(0, rqs));
 
   // State detection - ordered by priority
-  if (c > high60 * 0.99 && volRatio >= 1.3) {
+  // BREAKOUT: Near 60-day high with volume surge
+  if (c > high60 * 0.98 && volRatio >= 1.2) {
     return { state: "BREAKOUT", volRatio, rqs };
   }
-  if (c > high20 * 0.98 && volRatio >= 1.1 && c > m20) {
+  // CONFIRM: Near 20-day high with above-average volume, above MA20
+  if (c > high20 * 0.97 && volRatio >= 1.0 && c > m20) {
     return { state: "CONFIRM", volRatio, rqs };
   }
-  if (c >= m20 * 0.95 && c <= m20 * 1.03 && c > m50) {
-    // Near MA20 and above MA50 → potential retest
-    if (prev.close > m20 * 1.01 || volRatio < 0.9) {
-      return { state: "RETEST", volRatio, rqs };
-    }
+  // RETEST: Pullback to near MA20 zone but still above MA50
+  if (c >= m20 * 0.95 && c <= m20 * 1.05 && c > m50 * 0.98) {
+    return { state: "RETEST", volRatio, rqs };
   }
+  // TREND: Above MA20 and MA20 is rising
   if (c > m20 && m20 > m50) {
     const m20_5ago = data[data.length - 6]?.sma_20 ?? m20;
-    if (m20 >= m20_5ago) {
+    if (m20 >= m20_5ago * 0.998) {
       return { state: "TREND", volRatio, rqs };
     }
   }
-  if (bbWidth < 0.08 && c > m50 * 0.95) {
+  // BASE: Tight consolidation near MA50
+  if (bbWidth < 0.10 && c > m50 * 0.93) {
+    return { state: "BASE", volRatio, rqs };
+  }
+  // Extended BASE: above MA200 even if not tight
+  if (c > m200 && c > m50 * 0.95) {
     return { state: "BASE", volRatio, rqs };
   }
 
@@ -255,21 +315,18 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
  * NOTE: ratios from CSV are in DECIMAL form (0.15 = 15%).
  * We convert to percentage for comparison.
  *
- * Data coverage is limited (many major stocks missing from company_ratios.csv,
- * some fields are 0/undefined). Scoring compensates with:
- * - PE/EPS-based quality signals
- * - Gross margin as fallback for net margin
- * - Lower thresholds (PRIME>=5, VALID>=3)
- * - Stocks without any ratio data default to VALID (they are in our
- *   universe because they have price history = at least tracked stocks)
+ * V5.3 scoring: More lenient to match reference methodology.
+ * - Stocks without ratio data default to VALID (tracked = quality)
+ * - PRIME >= 4, VALID >= 2 (lowered from 5/2)
+ * - Added ROA, PB criteria for broader coverage
+ * - Price-momentum quality bonus for stocks in uptrend
  */
-function calcQTier(ratios: CompanyRatios | undefined): QTier {
-  // Stocks without fundamental data but with price CSV → assume VALID
-  // (they are in our universe = large-cap tracked stocks)
+function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]): QTier {
   if (!ratios) return "VALID";
 
   // Convert decimal ratios to percentage
   const roe = ratios.roe !== undefined ? ratios.roe * 100 : undefined;
+  const roa = ratios.roa !== undefined ? ratios.roa * 100 : undefined;
   const npg = ratios.net_profit_growth !== undefined ? ratios.net_profit_growth * 100 : undefined;
   const rg = ratios.revenue_growth !== undefined ? ratios.revenue_growth * 100 : undefined;
   const npm = ratios.net_profit_margin !== undefined ? ratios.net_profit_margin * 100 : undefined;
@@ -277,6 +334,7 @@ function calcQTier(ratios: CompanyRatios | undefined): QTier {
   const cr = ratios.current_ratio;
   const de = ratios.de;
   const pe = ratios.pe;
+  const pb = ratios.pb;
   const eps = ratios.eps;
 
   let score = 0;
@@ -286,19 +344,25 @@ function calcQTier(ratios: CompanyRatios | undefined): QTier {
   else if (roe !== undefined && roe >= 10) score += 2;
   else if (roe !== undefined && roe >= 5) score += 1;
 
+  // ROA fallback if ROE missing (max 1)
+  if (roe === undefined && roa !== undefined && roa >= 5) score += 1;
+
   // Growth (max 3)
   if (npg !== undefined && npg > 10) score += 2;
   else if (npg !== undefined && npg > 0) score += 1;
   if (rg !== undefined && rg > 5) score += 1;
 
-  // Valuation (max 2) - PE-based quality
+  // Valuation (max 2)
   if (pe !== undefined && pe > 0 && pe < 15) score += 2;
   else if (pe !== undefined && pe > 0 && pe < 25) score += 1;
+
+  // PB valuation (max 1)
+  if (pb !== undefined && pb > 0 && pb < 2) score += 1;
 
   // EPS quality (max 1)
   if (eps !== undefined && eps > 2000) score += 1;
 
-  // Margins (max 1) - use gross margin as fallback
+  // Margins (max 1)
   if (npm !== undefined && npm > 8) score += 1;
   else if (gm !== undefined && gm > 15) score += 1;
 
@@ -306,8 +370,18 @@ function calcQTier(ratios: CompanyRatios | undefined): QTier {
   if (cr !== undefined && cr >= 1.2) score += 1;
   if (de !== undefined && de < 2) score += 1;
 
-  // Max possible: 3 + 3 + 2 + 1 + 1 + 2 = 12
-  if (score >= 5) return "PRIME";
+  // Price-momentum quality bonus (max 1)
+  // Stocks in strong uptrend tend to have quality characteristics
+  if (priceData && priceData.length >= 50) {
+    const last = priceData[priceData.length - 1];
+    const c = last.close;
+    const sma50 = last.sma_50 ?? c;
+    const sma200 = last.sma_200 ?? c;
+    if (c > sma50 && sma50 > sma200) score += 1;
+  }
+
+  // Max possible: 3 + 1 + 3 + 2 + 1 + 1 + 1 + 2 + 1 = 15
+  if (score >= 4) return "PRIME";
   if (score >= 2) return "VALID";
   return "WATCH";
 }
@@ -455,18 +529,282 @@ function calcBucket(score: number): RSBucket {
   return "WEAK";
 }
 
+// ==================== MARKET REGIME ====================
+
+function layerSignal(score: number): RegimeState {
+  if (score >= 25) return "BULL";
+  if (score <= -25) return "BEAR";
+  return "NEUTRAL";
+}
+
+function calcIndexLayer(vnindex: IndexData[]): MarketRegime["indexLayer"] {
+  const details: string[] = [];
+  let score = 0;
+
+  if (vnindex.length < 5) {
+    return {
+      score: 0, signal: "NEUTRAL", label: "INDEX", details: ["Không đủ dữ liệu"],
+      vnindex: 0, change: 0, changePct: 0, sma20: 0, sma50: 0, sma200: 0,
+      rsi: 50, macd: 0, macdSignal: 0, trend: "N/A",
+    };
+  }
+
+  const last = vnindex[vnindex.length - 1];
+  const prev = vnindex[vnindex.length - 2];
+  const c = last.close;
+  const sma20 = last.sma_20 ?? c;
+  const sma50 = last.sma_50 ?? c;
+  const sma200 = last.sma_200 ?? c;
+  const rsi = last.rsi_14 ?? 50;
+  const macd = last.macd ?? 0;
+  const macdSig = last.macd_signal ?? 0;
+  const change = c - prev.close;
+  const changePct = prev.close > 0 ? (change / prev.close) * 100 : 0;
+
+  // Price vs MAs (max +/-40)
+  if (c > sma20) { score += 10; details.push("VN-Index > SMA20"); }
+  else { score -= 10; details.push("VN-Index < SMA20"); }
+
+  if (c > sma50) { score += 15; details.push("VN-Index > SMA50"); }
+  else { score -= 15; details.push("VN-Index < SMA50"); }
+
+  if (c > sma200) { score += 15; details.push("VN-Index > SMA200"); }
+  else { score -= 15; details.push("VN-Index < SMA200"); }
+
+  // MA alignment (max +/-20)
+  if (sma20 > sma50 && sma50 > sma200) { score += 20; details.push("MA alignment: Bull"); }
+  else if (sma20 < sma50 && sma50 < sma200) { score -= 20; details.push("MA alignment: Bear"); }
+  else { details.push("MA alignment: Mixed"); }
+
+  // RSI (max +/-15)
+  if (rsi >= 50) { score += Math.min(15, (rsi - 50) * 0.5); details.push(`RSI ${rsi.toFixed(0)} (Bullish)`); }
+  else { score -= Math.min(15, (50 - rsi) * 0.5); details.push(`RSI ${rsi.toFixed(0)} (Bearish)`); }
+
+  // MACD (max +/-15)
+  if (macd > macdSig) { score += 10; details.push("MACD > Signal"); }
+  else { score -= 10; details.push("MACD < Signal"); }
+  if (macd > 0) { score += 5; details.push("MACD > 0"); }
+  else { score -= 5; }
+
+  // 20-day trend (max +/-10)
+  const idx20ago = Math.max(0, vnindex.length - 21);
+  const close20ago = vnindex[idx20ago].close;
+  const return20d = close20ago > 0 ? ((c - close20ago) / close20ago) * 100 : 0;
+  if (return20d > 2) { score += 10; }
+  else if (return20d < -2) { score -= 10; }
+
+  // Determine trend label
+  let trend: string;
+  if (c > sma50 && sma20 > sma50) trend = "Uptrend";
+  else if (c < sma50 && sma20 < sma50) trend = "Downtrend";
+  else trend = "Sideways";
+
+  score = Math.max(-100, Math.min(100, Math.round(score)));
+
+  return {
+    score, signal: layerSignal(score), label: "INDEX", details,
+    vnindex: c, change: parseFloat(change.toFixed(2)),
+    changePct: parseFloat(changePct.toFixed(2)),
+    sma20, sma50, sma200, rsi, macd, macdSignal: macdSig, trend,
+  };
+}
+
+function calcBreadthLayer(breadth: MarketBreadth[]): MarketRegime["breadthLayer"] {
+  const details: string[] = [];
+  let score = 0;
+
+  // Aggregate across exchanges (HOSE + HNX)
+  let advancing = 0, declining = 0, unchanged = 0;
+  breadth.forEach((b) => {
+    advancing += b.advancing;
+    declining += b.declining;
+    unchanged += b.unchanged;
+  });
+
+  const total = advancing + declining + unchanged;
+  const adRatio = declining > 0 ? advancing / declining : advancing > 0 ? 5 : 1;
+  const netAD = advancing - declining;
+  const advPct = total > 0 ? (advancing / total) * 100 : 50;
+  const decPct = total > 0 ? (declining / total) * 100 : 50;
+
+  details.push(`Tăng: ${advancing} | Giảm: ${declining} | Đứng: ${unchanged}`);
+  details.push(`A/D Ratio: ${adRatio.toFixed(2)}`);
+
+  // AD ratio scoring (max +/-50)
+  if (adRatio >= 2.0) { score += 50; details.push("Breadth rất mạnh (AD≥2)"); }
+  else if (adRatio >= 1.5) { score += 35; details.push("Breadth mạnh (AD≥1.5)"); }
+  else if (adRatio >= 1.0) { score += 15; details.push("Breadth tích cực (AD≥1)"); }
+  else if (adRatio >= 0.7) { score -= 15; details.push("Breadth yếu (AD<1)"); }
+  else if (adRatio >= 0.5) { score -= 35; details.push("Breadth tiêu cực (AD<0.7)"); }
+  else { score -= 50; details.push("Breadth rất yếu (AD<0.5)"); }
+
+  // Advancing % bonus (max +/-30)
+  if (advPct >= 60) { score += 30; }
+  else if (advPct >= 50) { score += 15; }
+  else if (decPct >= 60) { score -= 30; }
+  else if (decPct >= 50) { score -= 15; }
+
+  // Breadth thrust detection (max +/-20)
+  if (adRatio >= 3.0) { score += 20; details.push("BREADTH THRUST detected!"); }
+  else if (adRatio <= 0.33) { score -= 20; details.push("Breadth collapse!"); }
+
+  score = Math.max(-100, Math.min(100, Math.round(score)));
+
+  return {
+    score, signal: layerSignal(score), label: "BREADTH", details,
+    advancing, declining, unchanged, adRatio: parseFloat(adRatio.toFixed(2)), netAD,
+  };
+}
+
+function calcMomentumLayer(toStocks: TOStock[]): MarketRegime["momentumLayer"] {
+  const details: string[] = [];
+  let score = 0;
+
+  const total = toStocks.length;
+  const primeCount = toStocks.filter((s) => s.qtier === "PRIME").length;
+  const validCount = toStocks.filter((s) => s.qtier === "VALID").length;
+  const breakoutCount = toStocks.filter((s) => s.state === "BREAKOUT" || s.state === "CONFIRM").length;
+  const trendCount = toStocks.filter((s) => s.state === "TREND" || s.state === "BREAKOUT" || s.state === "CONFIRM").length;
+  const weakCount = toStocks.filter((s) => s.state === "WEAK").length;
+  const avgMI = total > 0 ? Math.round(toStocks.reduce((s, t) => s + t.mi, 0) / total) : 50;
+
+  const primePct = total > 0 ? (primeCount / total) * 100 : 0;
+  const trendPct = total > 0 ? (trendCount / total) * 100 : 0;
+  const weakPct = total > 0 ? (weakCount / total) * 100 : 0;
+
+  details.push(`PRIME: ${primeCount} | VALID: ${validCount}`);
+  details.push(`Breakout/Confirm: ${breakoutCount} | Trend: ${trendCount}`);
+  details.push(`Avg MI: ${avgMI}`);
+
+  // PRIME ratio (max +/-20)
+  if (primePct >= 10) { score += 20; }
+  else if (primePct >= 5) { score += 10; }
+  else { score -= 5; }
+
+  // Trend participation (max +/-30)
+  if (trendPct >= 40) { score += 30; details.push("Trend participation cao (≥40%)"); }
+  else if (trendPct >= 25) { score += 15; }
+  else if (weakPct >= 60) { score -= 30; details.push("Weak dominance (≥60%)"); }
+  else if (weakPct >= 40) { score -= 15; }
+
+  // Average MI (max +/-30)
+  if (avgMI >= 65) { score += 30; details.push("Momentum mạnh"); }
+  else if (avgMI >= 55) { score += 15; }
+  else if (avgMI >= 45) { score += 0; }
+  else if (avgMI >= 35) { score -= 15; }
+  else { score -= 30; details.push("Momentum yếu"); }
+
+  // Breakout count (max +/-20)
+  if (breakoutCount >= 10) { score += 20; details.push("Nhiều breakout mới"); }
+  else if (breakoutCount >= 5) { score += 10; }
+  else if (breakoutCount <= 1) { score -= 10; }
+
+  score = Math.max(-100, Math.min(100, Math.round(score)));
+
+  return {
+    score, signal: layerSignal(score), label: "MOMENTUM", details,
+    primeCount, validCount, breakoutCount, trendCount, avgMI,
+  };
+}
+
+function calcFlowLayer(flow: ForeignFlow[]): MarketRegime["flowLayer"] {
+  const details: string[] = [];
+  let score = 0;
+
+  let foreignNetValue = 0, foreignNetVolume = 0;
+  flow.forEach((f) => {
+    foreignNetValue += f.foreign_net_value;
+    foreignNetVolume += f.foreign_net_volume;
+  });
+
+  // Determine flow bias
+  let flowBias: string;
+  if (foreignNetValue > 0) { flowBias = "Inflow"; }
+  else if (foreignNetValue < 0) { flowBias = "Outflow"; }
+  else { flowBias = "Neutral"; }
+
+  // Display in tỷ VND
+  const netValBn = foreignNetValue / 1e9;
+  details.push(`Foreign net: ${netValBn >= 0 ? "+" : ""}${netValBn.toFixed(1)} tỷ VND`);
+  details.push(`Flow bias: ${flowBias}`);
+
+  // Foreign flow scoring (max +/-100)
+  // Value in raw units varies, normalize scoring
+  if (foreignNetValue > 100e9) { score += 50; details.push("Dòng tiền ngoại mua ròng mạnh"); }
+  else if (foreignNetValue > 10e9) { score += 25; }
+  else if (foreignNetValue > 0) { score += 10; }
+  else if (foreignNetValue > -10e9) { score -= 10; }
+  else if (foreignNetValue > -100e9) { score -= 25; }
+  else { score -= 50; details.push("Dòng tiền ngoại bán ròng mạnh"); }
+
+  // Volume-based confirmation
+  if (foreignNetVolume > 0 && foreignNetValue > 0) { score += 20; details.push("Khối lượng & giá trị đều dương"); }
+  else if (foreignNetVolume < 0 && foreignNetValue < 0) { score -= 20; }
+
+  score = Math.max(-100, Math.min(100, Math.round(score)));
+
+  return {
+    score, signal: layerSignal(score), label: "FLOW", details,
+    foreignNetValue, foreignNetVolume, flowBias,
+  };
+}
+
+function buildRegime(
+  indexLayer: MarketRegime["indexLayer"],
+  breadthLayer: MarketRegime["breadthLayer"],
+  momentumLayer: MarketRegime["momentumLayer"],
+  flowLayer: MarketRegime["flowLayer"],
+): MarketRegime {
+  // Weighted average: INDEX 35%, BREADTH 25%, MOMENTUM 25%, FLOW 15%
+  const totalScore = Math.round(
+    indexLayer.score * 0.35 +
+    breadthLayer.score * 0.25 +
+    momentumLayer.score * 0.25 +
+    flowLayer.score * 0.15
+  );
+
+  let regime: RegimeState;
+  if (totalScore >= 25) regime = "BULL";
+  else if (totalScore <= -25) regime = "BEAR";
+  else regime = "NEUTRAL";
+
+  let allocation: string;
+  let allocDesc: string;
+  if (regime === "BULL") {
+    allocation = "80-100%";
+    allocDesc = "Ưu tiên giải ngân. Tìm Tier 1A/2A. Giữ vị thế Trend.";
+  } else if (regime === "NEUTRAL") {
+    allocation = "40-60%";
+    allocDesc = "Chọn lọc. Chỉ Tier 1A. Giảm size. Bảo vệ vốn.";
+  } else {
+    allocation = "0-20%";
+    allocDesc = "Phòng thủ. Không mở mới. Chờ tín hiệu phục hồi.";
+  }
+
+  return {
+    regime, score: totalScore, allocation, allocDesc,
+    indexLayer, breadthLayer, momentumLayer, flowLayer,
+  };
+}
+
 // ==================== MAIN ANALYSIS ====================
 
 export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel
-  const [stockList, allRatios, vnindexRaw] = await Promise.all([
+  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
-    getIndexHistory("VNINDEX").catch(() => []),
+    getIndexHistory("VNINDEX").catch(() => [] as IndexData[]),
+    getMarketBreadth().catch(() => [] as MarketBreadth[]),
+    getForeignFlow().catch(() => [] as ForeignFlow[]),
   ]);
 
-  // Cast vnindex data (IndexData has all the fields we need: close)
+  // Cast vnindex data (IndexData has all the fields we need for StockOHLCV)
   const vnindexData = vnindexRaw as unknown as StockOHLCV[];
+
+  // Calculate Index Layer immediately (doesn't depend on stock analysis)
+  const indexLayer = calcIndexLayer(vnindexRaw);
+  const breadthLayer = calcBreadthLayer(breadthRaw);
 
   // Step 2: Build lookup maps
   const ratiosMap = new Map<string, CompanyRatios>();
@@ -550,7 +888,7 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
           const tpaths = calcTrendPath(priceData);
           const { state, volRatio, rqs } = calcState(priceData);
           const mtf = calcMTF(priceData);
-          const qtier = calcQTier(ratios);
+          const qtier = calcQTier(ratios, priceData);
           const { miph, mi } = calcMIPhase(priceData);
 
           const toPartial: Omit<TOStock, "rank"> = {
@@ -604,6 +942,11 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
     rsCats[cat.key] = rsStocks.filter(cat.filter);
   }
 
+  // Calculate remaining regime layers
+  const momentumLayer = calcMomentumLayer(toStocks);
+  const flowLayer = calcFlowLayer(flowRaw);
+  const regime = buildRegime(indexLayer, breadthLayer, momentumLayer, flowLayer);
+
   return {
     totalStocks: toStocks.length,
     toStocks,
@@ -620,6 +963,7 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
       dLead: rsCats.d_lead_active.length,
       mLead: rsCats.m_lead_active.length,
     },
+    regime,
     generatedAt: new Date().toISOString(),
   };
 }
