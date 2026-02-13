@@ -16,7 +16,6 @@ import {
   getIndexHistory,
   type StockOHLCV,
   type CompanyRatios,
-  type StockListItem,
 } from "./vnstock-api";
 
 // ==================== TYPES ====================
@@ -34,7 +33,7 @@ export interface TOStock {
   symbol: string;
   price: number;
   changePct: number;
-  gtgd: number; // trading value 5-day avg in tỷ VND
+  gtgd: number; // trading value in tỷ VND
   state: State;
   tpaths: TrendPath;
   mtf: MTFSync;
@@ -107,8 +106,8 @@ export const TO_TIERS: TOTierConfig[] = [
   {
     key: "tier2a",
     name: "Tier 2A - Valid",
-    description: "VALID + Entry State + MTF≠WEAK | Entry được phép",
-    filter: (s) => s.qtier === "VALID" && (s.state === "RETEST" || s.state === "CONFIRM" || s.state === "BREAKOUT") && s.mtf !== "WEAK",
+    description: "VALID+ + Entry State + MTF≠WEAK | Entry được phép",
+    filter: (s) => s.qtier !== "WATCH" && (s.state === "RETEST" || s.state === "CONFIRM" || s.state === "BREAKOUT") && s.mtf !== "WEAK",
   },
   {
     key: "s_major_trend",
@@ -119,20 +118,20 @@ export const TO_TIERS: TOTierConfig[] = [
   {
     key: "fresh_breakout",
     name: "Fresh Breakout",
-    description: "BREAKOUT + QT≥VALID + VolR≥1.5 | Mới phá vỡ",
-    filter: (s) => s.state === "BREAKOUT" && s.qtier !== "WATCH" && s.volRatio >= 1.5,
+    description: "BREAKOUT + VolR≥1.3 | Mới phá vỡ",
+    filter: (s) => s.state === "BREAKOUT" && s.volRatio >= 1.3,
   },
   {
     key: "quality_retest",
     name: "Quality Retest",
-    description: "RETEST + S_MAJOR + RQS≥60 | Pullback chất lượng",
-    filter: (s) => s.state === "RETEST" && s.tpaths === "S_MAJOR" && s.rqs >= 60,
+    description: "RETEST + MAJOR+ + RQS≥55 | Pullback chất lượng",
+    filter: (s) => s.state === "RETEST" && (s.tpaths === "S_MAJOR" || s.tpaths === "MAJOR") && s.rqs >= 55,
   },
   {
     key: "pipeline",
     name: "Pipeline (BASE)",
-    description: "BASE + QT≥VALID + MI MID+ | Theo dõi",
-    filter: (s) => s.state === "BASE" && s.qtier !== "WATCH" && (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
+    description: "BASE + MI MID+ | Theo dõi",
+    filter: (s) => s.state === "BASE" && (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
   },
 ];
 
@@ -158,8 +157,8 @@ export const RS_CATEGORIES: RSCategoryConfig[] = [
   {
     key: "probe_watch",
     name: "PROBE Watch",
-    description: "Improving + PROBE + Score≥50 | Sắp breakout RS",
-    filter: (s) => s.rsState === "Improving" && s.score >= 50,
+    description: "Improving + Score≥45 | Sắp breakout RS",
+    filter: (s) => s.rsState === "Improving" && s.score >= 45,
   },
 ];
 
@@ -204,34 +203,35 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
 
   // Retest Quality Score (RQS)
   let rqs = 50;
-  if (c >= m20 * 0.97 && c <= m20 * 1.03) rqs += 15; // near MA20
-  if (volRatio < 1.2) rqs += 10; // low volume pullback = healthy
-  if (l.rsi_14 && l.rsi_14 >= 40 && l.rsi_14 <= 55) rqs += 15; // RSI in good zone
+  if (c >= m20 * 0.97 && c <= m20 * 1.03) rqs += 15;
+  if (volRatio < 1.2) rqs += 10;
+  if (l.rsi_14 && l.rsi_14 >= 40 && l.rsi_14 <= 55) rqs += 15;
   if (data.length >= 5) {
     const fiveDaysAgo = data[data.length - 5];
-    if (c < fiveDaysAgo.close && c > m50) rqs += 10; // pulled back but above MA50
+    if (c < fiveDaysAgo.close && c > m50) rqs += 10;
   }
   rqs = Math.min(100, Math.max(0, rqs));
 
-  // State detection
-  if (c > high60 * 0.99 && volRatio >= 1.5) {
+  // State detection - ordered by priority
+  if (c > high60 * 0.99 && volRatio >= 1.3) {
     return { state: "BREAKOUT", volRatio, rqs };
   }
-  if (c > high20 * 0.99 && volRatio >= 1.2 && c > m20) {
+  if (c > high20 * 0.98 && volRatio >= 1.1 && c > m20) {
     return { state: "CONFIRM", volRatio, rqs };
   }
-  // Retest: pulled back toward MA20 or MA50
-  if (c >= m20 * 0.95 && c <= m20 * 1.02 && prev.close > m20 * 1.02 && c > m50) {
-    return { state: "RETEST", volRatio, rqs };
+  if (c >= m20 * 0.95 && c <= m20 * 1.03 && c > m50) {
+    // Near MA20 and above MA50 → potential retest
+    if (prev.close > m20 * 1.01 || volRatio < 0.9) {
+      return { state: "RETEST", volRatio, rqs };
+    }
   }
   if (c > m20 && m20 > m50) {
-    // Check if MA20 is rising
     const m20_5ago = data[data.length - 6]?.sma_20 ?? m20;
-    if (m20 > m20_5ago) {
+    if (m20 >= m20_5ago) {
       return { state: "TREND", volRatio, rqs };
     }
   }
-  if (bbWidth < 0.06 && c > m50 * 0.97) {
+  if (bbWidth < 0.08 && c > m50 * 0.95) {
     return { state: "BASE", volRatio, rqs };
   }
 
@@ -242,27 +242,44 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
   if (data.length < 5) return "WEAK";
   const l = data[data.length - 1];
   const c = l.close;
-  const short = c > (l.sma_20 ?? c); // daily
-  const med = c > (l.sma_50 ?? c); // weekly equivalent
-  const long = c > (l.sma_200 ?? c); // monthly equivalent
+  const short = c > (l.sma_20 ?? c);
+  const med = c > (l.sma_50 ?? c);
+  const long = c > (l.sma_200 ?? c);
   if (short && med && long) return "SYNC";
   if ((short && med) || (med && long)) return "PARTIAL";
   return "WEAK";
 }
 
+/**
+ * Quality Tier based on fundamentals.
+ * NOTE: ratios from CSV are in DECIMAL form (0.15 = 15%).
+ * We convert to percentage for comparison.
+ */
 function calcQTier(ratios: CompanyRatios | undefined): QTier {
   if (!ratios) return "WATCH";
-  const { roe, net_profit_growth, revenue_growth, current_ratio, de, net_profit_margin } = ratios;
+
+  // Convert decimal ratios to percentage where needed
+  const roe = ratios.roe !== undefined ? ratios.roe * 100 : undefined;
+  const npg = ratios.net_profit_growth !== undefined ? ratios.net_profit_growth * 100 : undefined;
+  const rg = ratios.revenue_growth !== undefined ? ratios.revenue_growth * 100 : undefined;
+  const npm = ratios.net_profit_margin !== undefined ? ratios.net_profit_margin * 100 : undefined;
+  // current_ratio and de are already ratios (1.2x, 0.5x), no conversion needed
+  const cr = ratios.current_ratio;
+  const de = ratios.de;
+
   let score = 0;
   if (roe !== undefined && roe >= 15) score += 3;
   else if (roe !== undefined && roe >= 10) score += 2;
   else if (roe !== undefined && roe >= 5) score += 1;
-  if (net_profit_growth !== undefined && net_profit_growth > 10) score += 2;
-  else if (net_profit_growth !== undefined && net_profit_growth > 0) score += 1;
-  if (revenue_growth !== undefined && revenue_growth > 10) score += 1;
-  if (current_ratio !== undefined && current_ratio >= 1.2) score += 1;
+
+  if (npg !== undefined && npg > 10) score += 2;
+  else if (npg !== undefined && npg > 0) score += 1;
+
+  if (rg !== undefined && rg > 10) score += 1;
+
+  if (cr !== undefined && cr >= 1.2) score += 1;
   if (de !== undefined && de < 2) score += 1;
-  if (net_profit_margin !== undefined && net_profit_margin > 10) score += 1;
+  if (npm !== undefined && npm > 10) score += 1;
 
   if (score >= 7) return "PRIME";
   if (score >= 4) return "VALID";
@@ -283,7 +300,6 @@ function calcMIPhase(data: StockOHLCV[]): { miph: MIPhase; mi: number } {
   const m50 = l.sma_50 ?? c;
   const m200 = l.sma_200 ?? c;
 
-  // MI calculation (0-100)
   let mi = 0;
 
   // RSI component (0-25)
@@ -322,15 +338,12 @@ function calcMIPhase(data: StockOHLCV[]): { miph: MIPhase; mi: number } {
 
 function calcRank(to: Omit<TOStock, "rank">): number {
   let rank = 0;
-  // Quality (0-500)
   if (to.qtier === "PRIME") rank += 450;
   else if (to.qtier === "VALID") rank += 300;
   else rank += 100;
 
-  // Technical (0-500)
-  rank += to.mi * 5; // mi 0-100 → 0-500
+  rank += to.mi * 5;
 
-  // Momentum bonus (0-500)
   if (to.tpaths === "S_MAJOR") rank += 200;
   else if (to.tpaths === "MAJOR") rank += 130;
   else if (to.tpaths === "MINOR") rank += 60;
@@ -356,7 +369,6 @@ function calcRS(
   const sLen = stockData.length;
   const vLen = vnindexData.length;
 
-  // Calculate returns over different periods
   const calcReturn = (data: StockOHLCV[], periods: number) => {
     if (data.length < periods + 1) return 0;
     const now = data[data.length - 1].close;
@@ -376,16 +388,13 @@ function calcRS(
   const rs50 = sr50 - vr50;
   const rs200 = sr200 - vr200;
 
-  // RS% is the weighted average
   const rsPct = parseFloat((rs20 * 0.5 + rs50 * 0.3 + rs200 * 0.2).toFixed(2));
 
-  // RS trend (compare current rs20 with 5-day ago rs20)
   const sr20_5ago = stockData.length >= 26 ? calcReturn(stockData.slice(0, -5), 20) : sr20;
   const vr20_5ago = vnindexData.length >= 26 ? calcReturn(vnindexData.slice(0, -5), 20) : vr20;
   const rs20_5ago = sr20_5ago - vr20_5ago;
   const rsTrend = rs20 - rs20_5ago;
 
-  // RS State
   let rsState: RSState;
   if (rsPct > 3 && rsTrend > 0) rsState = "Leading";
   else if (rsTrend > 0.5) rsState = "Improving";
@@ -393,14 +402,12 @@ function calcRS(
   else if (rsTrend < -0.5 && rsPct > 0) rsState = "Weakening";
   else rsState = "Declining";
 
-  // Vector
   let vector: RSVector;
   if (rs20 > 0 && rs50 > 0 && rs200 > 0) vector = "SYNC";
   else if (rs20 > 2) vector = "D_LEAD";
   else if (rs200 > 2) vector = "M_LEAD";
   else vector = "NEUT";
 
-  // Score (0-100)
   let score = 50;
   score += Math.min(20, Math.max(-20, rsPct * 2));
   score += Math.min(10, Math.max(-10, rsTrend * 3));
@@ -425,34 +432,65 @@ function calcBucket(score: number): RSBucket {
 // ==================== MAIN ANALYSIS ====================
 
 export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
-  // Step 1: Get all data sources
-  const [stockList, allRatios, vnindexData] = await Promise.all([
+  // Step 1: Get all data sources in parallel
+  const [stockList, allRatios, vnindexRaw] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
-    getIndexHistory("VNINDEX").catch(() => [] as StockOHLCV[]),
+    getIndexHistory("VNINDEX").catch(() => []),
   ]);
 
-  // Step 2: Build ratios map & get top 500 by market cap
+  // Cast vnindex data (IndexData has all the fields we need: close)
+  const vnindexData = vnindexRaw as unknown as StockOHLCV[];
+
+  // Step 2: Build lookup maps
   const ratiosMap = new Map<string, CompanyRatios>();
-  allRatios.forEach((r) => { if (r.symbol) ratiosMap.set(r.symbol, r); });
+  allRatios.forEach((r) => {
+    if (r.symbol) ratiosMap.set(r.symbol.toUpperCase(), r);
+  });
 
-  // Join stock list with ratios for market cap
-  const stocksWithCap = stockList
-    .filter((s) => s.close_price > 0 && s.total_volume > 0)
-    .map((s) => ({
-      ...s,
-      marketCap: ratiosMap.get(s.symbol)?.market_cap ?? 0,
-      gtgd: (s.close_price * s.total_volume) / 1e9, // tỷ VND
-    }))
-    .filter((s) => s.marketCap > 0)
-    .sort((a, b) => b.marketCap - a.marketCap)
-    .slice(0, 500);
+  const tradingMap = new Map<string, { close_price: number; price_change_pct: number; total_volume: number }>();
+  stockList.forEach((s) => {
+    if (s.symbol) tradingMap.set(s.symbol.toUpperCase(), s);
+  });
 
-  // Step 3: Filter by liquidity (GTGD >= 5 tỷ)
-  const liquidStocks = stocksWithCap.filter((s) => s.gtgd >= 5);
+  // Step 3: Build universe from BOTH company_ratios AND trading_stats
+  // Use company_ratios as base (400+ stocks), enrich with trading data
+  const symbolSet = new Set<string>();
+  allRatios.forEach((r) => { if (r.symbol) symbolSet.add(r.symbol.toUpperCase()); });
+  stockList.forEach((s) => { if (s.symbol) symbolSet.add(s.symbol.toUpperCase()); });
 
-  // Step 4: Take top N for detailed analysis
-  const toAnalyze = liquidStocks.slice(0, topN);
+  // Compute market cap: close_price * issue_share
+  // If no trading data, estimate from pe * eps
+  const universe = Array.from(symbolSet).map((sym) => {
+    const ratios = ratiosMap.get(sym);
+    const trading = tradingMap.get(sym);
+
+    const estimatedPrice = (ratios?.pe ?? 0) * (ratios?.eps ?? 0);
+    const closePrice = trading?.close_price ?? (estimatedPrice > 0 ? estimatedPrice : 0);
+    const issueShare = ratios?.issue_share ?? 0;
+    const marketCap = closePrice > 0 && issueShare > 0
+      ? closePrice * issueShare
+      : (ratios?.ev ?? 0); // fallback to enterprise value
+
+    const volume = trading?.total_volume ?? 0;
+    const gtgd = closePrice > 0 && volume > 0
+      ? (closePrice * volume) / 1e9
+      : 0;
+
+    return {
+      symbol: sym,
+      closePrice,
+      changePct: trading?.price_change_pct ?? 0,
+      volume,
+      marketCap,
+      gtgd,
+    };
+  })
+    .filter((s) => s.closePrice > 0)
+    .sort((a, b) => b.marketCap - a.marketCap);
+
+  // Step 4: Take top N symbols for detailed analysis (no strict GTGD filter)
+  const toAnalyze = universe.slice(0, topN);
 
   // Step 5: Batch fetch price histories
   const toStocks: TOStock[] = [];
@@ -469,6 +507,16 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
 
           const ratios = ratiosMap.get(stock.symbol);
 
+          // Get latest price from price data if available
+          const latestPrice = priceData[priceData.length - 1]?.close ?? stock.closePrice;
+          const prevPrice = priceData.length >= 2 ? priceData[priceData.length - 2].close : latestPrice;
+          const changePct = prevPrice > 0 ? ((latestPrice - prevPrice) / prevPrice) * 100 : stock.changePct;
+
+          // Compute GTGD from recent price data (5-day avg)
+          const recentVols = priceData.slice(-5);
+          const avgVal = recentVols.reduce((s, d) => s + d.close * d.volume, 0) / recentVols.length;
+          const gtgd = parseFloat((avgVal / 1e9).toFixed(1));
+
           // TO calculations
           const tpaths = calcTrendPath(priceData);
           const { state, volRatio, rqs } = calcState(priceData);
@@ -478,10 +526,12 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
 
           const toPartial: Omit<TOStock, "rank"> = {
             symbol: stock.symbol,
-            price: stock.close_price,
-            changePct: stock.price_change_pct,
-            gtgd: parseFloat(stock.gtgd.toFixed(1)),
-            state, tpaths, mtf, qtier, miph, mi, volRatio: parseFloat(volRatio.toFixed(2)), rqs,
+            price: latestPrice,
+            changePct: parseFloat(changePct.toFixed(2)),
+            gtgd,
+            state, tpaths, mtf, qtier, miph, mi,
+            volRatio: parseFloat(volRatio.toFixed(2)),
+            rqs,
           };
           const toStock: TOStock = { ...toPartial, rank: calcRank(toPartial) };
 
@@ -489,16 +539,18 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
           const { rsPct, rsState, vector, score, isActive } = calcRS(priceData, vnindexData);
           const rsStock: RSStock = {
             symbol: stock.symbol,
-            price: stock.close_price,
-            changePct: stock.price_change_pct,
-            gtgd: parseFloat(stock.gtgd.toFixed(1)),
+            price: latestPrice,
+            changePct: parseFloat(changePct.toFixed(2)),
+            gtgd,
             rsState, vector,
             bucket: calcBucket(score),
             rsPct, score, isActive,
           };
 
           return { toStock, rsStock };
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       })
     );
     results.forEach((r) => {
