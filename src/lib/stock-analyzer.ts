@@ -28,13 +28,44 @@ import {
 export type TrendPath = "S_MAJOR" | "MAJOR" | "MINOR" | "WEAK";
 export type State = "BREAKOUT" | "CONFIRM" | "RETEST" | "TREND" | "BASE" | "WEAK";
 export type MTFSync = "SYNC" | "PARTIAL" | "WEAK";
-export type QTier = "PRIME" | "VALID" | "WATCH";
+export type QTier = "PRIME" | "VALID" | "WATCH" | "AVOID";
 export type MIPhase = "PEAK" | "HIGH" | "MID" | "LOW";
 export type RSState = "Leading" | "Improving" | "Neutral" | "Weakening" | "Declining";
 export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "NEUT";
 export type RSBucket = "PRIME" | "ELITE" | "CORE" | "QUALITY" | "WEAK";
 
-export type RegimeState = "BULL" | "NEUTRAL" | "BEAR";
+export type RegimeState = "BULL" | "NEUTRAL" | "BEAR" | "BLOCKED";
+
+export type BreadthQuadrant = "Q1" | "Q2" | "Q3" | "Q4";
+export type RegimeMode = "STABLE" | "BLOCKED" | "ROTATING";
+export type CeilingStatus = "CLEAR" | "BLOCKED";
+export type RotationStatus = "SYNC" | "DESYNC";
+
+export interface IndexOverview {
+  symbol: string;
+  state: string; // e.g., "7.EXIT"
+  stateNum: number; // e.g., 7
+  mi: number;
+  miPhase: MIPhase;
+  tpath: TrendPath;
+  miD: number; // daily MI
+  miW: number; // weekly MI
+  miM: number; // monthly MI
+  dMI_D: number; // delta MI daily
+  dMI_W: number; // delta MI weekly
+  bqs: number; // base quality score
+  rqs: number; // retest quality score
+  volX: number; // volume ratio
+}
+
+export interface BreadthIndex {
+  symbol: string;
+  quadrant: BreadthQuadrant;
+  aboveEMA50Pct: number;
+  slope5d: number;
+  slope10d?: number;
+  accel?: number;
+}
 
 export interface RegimeLayer {
   score: number;    // -100 to +100
@@ -43,12 +74,62 @@ export interface RegimeLayer {
   details: string[];
 }
 
+// Layer 1: VNINDEX TO (Ceiling Check)
+export interface Layer1Ceiling extends RegimeLayer {
+  status: CeilingStatus;
+  broken: boolean;
+  weak: boolean;
+  badge: string; // "LIMITED", "CLEAR"
+}
+
+// Layer 2: Components (Rotation)
+export interface Layer2Components extends RegimeLayer {
+  status: RotationStatus;
+  vn30Status: string; // "OUTPERFORM", "UNDERPERFORM", "NEUTRAL"
+  vnmidStatus: string;
+  vn30dMI: number;
+  vnmiddMI: number;
+  rotation: string; // "None", "VN30→VNMID", etc.
+  badge: string; // "CHECK", "ROTATING"
+}
+
+// Layer 3: Breadth V2 (Quadrant)
+export interface Layer3Breadth extends RegimeLayer {
+  allStockQuadrant: BreadthQuadrant;
+  vn30Breadth: BreadthIndex;
+  vnmidBreadth: BreadthIndex;
+  allStockAboveEMA50: number;
+  base: string; // "CAU" (Cautious), "NEU" (Neutral), "AGG" (Aggressive)
+  badge: string; // "ALL_WEAK", "ALL_STRONG", "MIXED"
+}
+
+// Layer 4: Regime Output
+export interface Layer4Output extends RegimeLayer {
+  base: string;
+  ceilingStatus: CeilingStatus;
+  direction: string; // "STABLE", "IMPROVING", "DETERIORATING"
+  mode: RegimeMode;
+  lead: string; // From Layer 3 badge
+  badge: string; // "LOW", "MED", "HIGH"
+}
+
 export interface MarketRegime {
   regime: RegimeState;
   score: number;        // -100 to +100
   allocation: string;   // "80-100%" etc.
   allocDesc: string;
-  indexLayer: RegimeLayer & {
+  
+  // New 4-layer structure
+  layer1Ceiling: Layer1Ceiling;
+  layer2Components: Layer2Components;
+  layer3Breadth: Layer3Breadth;
+  layer4Output: Layer4Output;
+  
+  // Index Overview
+  indices: IndexOverview[];
+  
+  // Legacy layers (kept for backward compatibility)
+  indexLayer?: RegimeLayer & {
     vnindex: number;
     change: number;
     changePct: number;
@@ -60,21 +141,21 @@ export interface MarketRegime {
     macdSignal: number;
     trend: string;
   };
-  breadthLayer: RegimeLayer & {
+  breadthLayer?: RegimeLayer & {
     advancing: number;
     declining: number;
     unchanged: number;
     adRatio: number;
     netAD: number;
   };
-  momentumLayer: RegimeLayer & {
+  momentumLayer?: RegimeLayer & {
     primeCount: number;
     validCount: number;
     breakoutCount: number;
     trendCount: number;
     avgMI: number;
   };
-  flowLayer: RegimeLayer & {
+  flowLayer?: RegimeLayer & {
     foreignNetValue: number;
     foreignNetVolume: number;
     flowBias: string;
@@ -136,12 +217,16 @@ export interface AnalysisResult {
   counts: {
     prime: number;
     valid: number;
+    watch: number;
+    avoid: number;
     tier1a: number;
     tier2a: number;
     active: number;
     sync: number;
     dLead: number;
     mLead: number;
+    weak: number;
+    neut: number;
   };
   regime: MarketRegime;
   generatedAt: string;
@@ -149,42 +234,59 @@ export interface AnalysisResult {
 
 // ==================== TIER/CATEGORY CONFIGS ====================
 
+// Helper to check if stock is in higher tiers
+const isTier1A = (s: TOStock) => 
+  s.qtier === "PRIME" && (s.state === "RETEST" || s.state === "CONFIRM") && s.mtf === "SYNC";
+
+const isTier2A = (s: TOStock) => 
+  s.qtier !== "WATCH" && s.qtier !== "AVOID" && 
+  (s.state === "RETEST" || s.state === "CONFIRM") && 
+  s.mtf !== "WEAK" && 
+  !isTier1A(s);
+
+const isSMajorTrend = (s: TOStock) => 
+  s.tpaths === "S_MAJOR" && s.state === "TREND" && 
+  (s.miph === "HIGH" || s.miph === "PEAK") && 
+  !isTier1A(s) && !isTier2A(s);
+
 export const TO_TIERS: TOTierConfig[] = [
   {
     key: "tier1a",
     name: "Tier 1A - Ready",
     description: "PRIME + Entry State + SYNC | Entry tối ưu",
-    filter: (s) => s.qtier === "PRIME" && (s.state === "RETEST" || s.state === "CONFIRM") && s.mtf === "SYNC",
+    filter: isTier1A,
   },
   {
     key: "tier2a",
     name: "Tier 2A - Valid",
-    description: "VALID+ + Entry State + MTF≠WEAK | Entry được phép",
-    filter: (s) => s.qtier !== "WATCH" && (s.state === "RETEST" || s.state === "CONFIRM" || s.state === "BREAKOUT") && s.mtf !== "WEAK",
+    description: "VALID + Entry State + MTF≠WEAK | Entry được phép",
+    filter: isTier2A,
   },
   {
     key: "s_major_trend",
     name: "S_MAJOR TREND",
     description: "S_MAJOR + TREND + MI HIGH/PEAK | Giữ vị thế",
-    filter: (s) => s.tpaths === "S_MAJOR" && s.state === "TREND" && (s.miph === "HIGH" || s.miph === "PEAK"),
+    filter: isSMajorTrend,
   },
   {
     key: "fresh_breakout",
     name: "Fresh Breakout",
-    description: "BREAKOUT + VolR≥1.3 | Mới phá vỡ",
-    filter: (s) => s.state === "BREAKOUT" && s.volRatio >= 1.3,
+    description: "BREAKOUT + QT≥VALID + VolX≥1.5 | Mới phá vỡ",
+    filter: (s) => s.state === "BREAKOUT" && s.qtier !== "WATCH" && s.qtier !== "AVOID" && s.volRatio >= 1.5,
   },
   {
     key: "quality_retest",
     name: "Quality Retest",
-    description: "RETEST + MAJOR+ + RQS≥55 | Pullback chất lượng",
-    filter: (s) => s.state === "RETEST" && (s.tpaths === "S_MAJOR" || s.tpaths === "MAJOR") && s.rqs >= 55,
+    description: "RETEST + S_MAJOR + RQS≥60 | Pullback chất lượng",
+    filter: (s) => s.state === "RETEST" && s.tpaths === "S_MAJOR" && s.rqs >= 60 && 
+                   !isTier1A(s) && !isTier2A(s) && !isSMajorTrend(s),
   },
   {
     key: "pipeline",
     name: "Pipeline (BASE)",
-    description: "BASE + MI MID+ | Theo dõi",
-    filter: (s) => s.state === "BASE" && (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
+    description: "BASE + QT≥VALID + MI MID+ | Theo dõi",
+    filter: (s) => s.state === "BASE" && s.qtier !== "WATCH" && s.qtier !== "AVOID" && 
+                   (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
   },
 ];
 
@@ -210,8 +312,8 @@ export const RS_CATEGORIES: RSCategoryConfig[] = [
   {
     key: "probe_watch",
     name: "PROBE Watch",
-    description: "Improving + Score≥45 | Sắp breakout RS",
-    filter: (s) => s.rsState === "Improving" && s.score >= 45,
+    description: "Improving + PROBE + ScoreQual≥50",
+    filter: (s) => s.rsState === "Improving" && s.score >= 50,
   },
 ];
 
@@ -234,7 +336,6 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
   if (data.length < 20) return { state: "WEAK", volRatio: 1, rqs: 0 };
 
   const l = data[data.length - 1];
-  const prev = data[data.length - 2];
   const c = l.close;
   const m20 = l.sma_20 ?? c;
   const m50 = l.sma_50 ?? c;
@@ -315,14 +416,18 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
  * NOTE: ratios from CSV are in DECIMAL form (0.15 = 15%).
  * We convert to percentage for comparison.
  *
- * V5.3 scoring: More lenient to match reference methodology.
- * - Stocks without ratio data default to VALID (tracked = quality)
- * - PRIME >= 4, VALID >= 2 (lowered from 5/2)
- * - Added ROA, PB criteria for broader coverage
- * - Price-momentum quality bonus for stocks in uptrend
+ * V5.3 scoring: Stricter thresholds to match reference distribution.
+ * - Reference distribution: PRIME 4%, VALID 8%, WATCH 19%, AVOID 69%
+ * - Stocks without ratio data default to AVOID (not VALID)
+ *   Rationale: In the reference system, most stocks (69%) are AVOID, suggesting
+ *   that quality data is essential. Missing ratios indicates lack of transparency
+ *   or tracking, which aligns with AVOID criteria. This is a conservative
+ *   approach that protects against investing in stocks with insufficient data.
+ * - PRIME >= 8, VALID >= 5, WATCH >= 2, else AVOID
+ * - More stringent ROE/growth requirements
  */
 function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]): QTier {
-  if (!ratios) return "VALID";
+  if (!ratios) return "AVOID";
 
   // Convert decimal ratios to percentage
   const roe = ratios.roe !== undefined ? ratios.roe * 100 : undefined;
@@ -330,7 +435,6 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
   const npg = ratios.net_profit_growth !== undefined ? ratios.net_profit_growth * 100 : undefined;
   const rg = ratios.revenue_growth !== undefined ? ratios.revenue_growth * 100 : undefined;
   const npm = ratios.net_profit_margin !== undefined ? ratios.net_profit_margin * 100 : undefined;
-  const gm = ratios.gross_margin !== undefined ? ratios.gross_margin * 100 : undefined;
   const cr = ratios.current_ratio;
   const de = ratios.de;
   const pe = ratios.pe;
@@ -339,36 +443,38 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
 
   let score = 0;
 
-  // ROE (max 3) - primary quality indicator
-  if (roe !== undefined && roe >= 15) score += 3;
+  // ROE (max 4) - primary quality indicator, more stringent
+  if (roe !== undefined && roe >= 20) score += 4;
+  else if (roe !== undefined && roe >= 15) score += 3;
   else if (roe !== undefined && roe >= 10) score += 2;
   else if (roe !== undefined && roe >= 5) score += 1;
 
-  // ROA fallback if ROE missing (max 1)
-  if (roe === undefined && roa !== undefined && roa >= 5) score += 1;
+  // ROA fallback if ROE missing (max 2)
+  if (roe === undefined && roa !== undefined && roa >= 8) score += 2;
+  else if (roe === undefined && roa !== undefined && roa >= 5) score += 1;
 
   // Growth (max 3)
-  if (npg !== undefined && npg > 10) score += 2;
-  else if (npg !== undefined && npg > 0) score += 1;
-  if (rg !== undefined && rg > 5) score += 1;
+  if (npg !== undefined && npg > 15) score += 2;
+  else if (npg !== undefined && npg > 5) score += 1;
+  if (rg !== undefined && rg > 10) score += 1;
 
   // Valuation (max 2)
-  if (pe !== undefined && pe > 0 && pe < 15) score += 2;
-  else if (pe !== undefined && pe > 0 && pe < 25) score += 1;
+  if (pe !== undefined && pe > 0 && pe < 12) score += 2;
+  else if (pe !== undefined && pe > 0 && pe < 20) score += 1;
 
   // PB valuation (max 1)
-  if (pb !== undefined && pb > 0 && pb < 2) score += 1;
+  if (pb !== undefined && pb > 0 && pb < 1.5) score += 1;
 
   // EPS quality (max 1)
-  if (eps !== undefined && eps > 2000) score += 1;
+  if (eps !== undefined && eps > 3000) score += 1;
 
-  // Margins (max 1)
-  if (npm !== undefined && npm > 8) score += 1;
-  else if (gm !== undefined && gm > 15) score += 1;
+  // Margins (max 2)
+  if (npm !== undefined && npm > 10) score += 2;
+  else if (npm !== undefined && npm > 5) score += 1;
 
   // Solvency (max 2)
-  if (cr !== undefined && cr >= 1.2) score += 1;
-  if (de !== undefined && de < 2) score += 1;
+  if (cr !== undefined && cr >= 1.5) score += 1;
+  if (de !== undefined && de < 1.5) score += 1;
 
   // Price-momentum quality bonus (max 1)
   // Stocks in strong uptrend tend to have quality characteristics
@@ -380,10 +486,12 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
     if (c > sma50 && sma50 > sma200) score += 1;
   }
 
-  // Max possible: 3 + 1 + 3 + 2 + 1 + 1 + 1 + 2 + 1 = 15
-  if (score >= 4) return "PRIME";
-  if (score >= 2) return "VALID";
-  return "WATCH";
+  // Max possible: 4 + 2 + 3 + 2 + 1 + 1 + 2 + 2 + 1 = 18
+  // Adjusted thresholds to match reference distribution
+  if (score >= 8) return "PRIME";    // ~4%
+  if (score >= 5) return "VALID";    // ~8%
+  if (score >= 2) return "WATCH";    // ~19%
+  return "AVOID";                     // ~69%
 }
 
 function calcMIPhase(data: StockOHLCV[]): { miph: MIPhase; mi: number } {
@@ -536,6 +644,378 @@ function layerSignal(score: number): RegimeState {
   if (score <= -25) return "BEAR";
   return "NEUTRAL";
 }
+
+// ==================== 4-LAYER REGIME MODEL ====================
+
+function determineIndexState(mi: number, tpath: TrendPath, miph: MIPhase): { state: string; stateNum: number } {
+  // State numbering system based on MI and trend
+  if (tpath === "S_MAJOR" && miph === "PEAK") return { state: "1.BREAKOUT", stateNum: 1 };
+  if (tpath === "S_MAJOR" && miph === "HIGH") return { state: "2.CONFIRM", stateNum: 2 };
+  if (tpath === "MAJOR" && miph === "HIGH") return { state: "3.TREND", stateNum: 3 };
+  if (tpath === "MAJOR" && miph === "MID") return { state: "4.RETEST", stateNum: 4 };
+  if (tpath === "MINOR" && miph === "MID") return { state: "5.BASE", stateNum: 5 };
+  if (tpath === "WEAK" || miph === "LOW") return { state: "6.WEAK", stateNum: 6 };
+  if (mi < 40) return { state: "7.EXIT", stateNum: 7 };
+  return { state: "3.TREND", stateNum: 3 };
+}
+
+function determineBreadthQuadrant(aboveEMA50: number, slope: number): BreadthQuadrant {
+  // Q1: Bull (>50% above EMA50, positive slope)
+  // Q2: Improving (>50% above EMA50, negative slope)
+  // Q3: Bear (<50% above EMA50, negative slope)
+  // Q4: Recovering (<50% above EMA50, positive slope)
+  const isAbove50 = aboveEMA50 > 50;
+  const isPositiveSlope = slope > 0;
+  
+  if (isAbove50 && isPositiveSlope) return "Q1";
+  if (isAbove50 && !isPositiveSlope) return "Q2";
+  if (!isAbove50 && !isPositiveSlope) return "Q3";
+  return "Q4";
+}
+
+async function calcIndexOverviews(): Promise<IndexOverview[]> {
+  const indexSymbols = ["VNINDEX", "VN30", "VNMID", "VNSML"];
+  const indexDataArray = await Promise.all(
+    indexSymbols.map(sym => getIndexHistory(sym).catch(() => [] as IndexData[]))
+  );
+  
+  const overviews: IndexOverview[] = [];
+  
+  for (let i = 0; i < indexSymbols.length; i++) {
+    const symbol = indexSymbols[i];
+    const data = indexDataArray[i];
+    
+    if (data.length < 5) continue;
+    
+    const last = data[data.length - 1];
+    const prev = data[data.length - 2];
+    
+    // Calculate MI (using RSI as proxy)
+    const mi = last.rsi_14 ?? 50;
+    const miPrev = prev.rsi_14 ?? 50;
+    const dMI_D = mi - miPrev;
+    
+    // Determine MI phase
+    let miPhase: MIPhase;
+    if (mi >= 70) miPhase = "PEAK";
+    else if (mi >= 55) miPhase = "HIGH";
+    else if (mi >= 45) miPhase = "MID";
+    else miPhase = "LOW";
+    
+    // Determine trend path
+    const c = last.close;
+    const sma20 = last.sma_20 ?? c;
+    const sma50 = last.sma_50 ?? c;
+    const sma200 = last.sma_200 ?? c;
+    
+    let tpath: TrendPath;
+    if (c > sma50 && sma20 > sma50 && sma50 > sma200) tpath = "S_MAJOR";
+    else if (c > sma50 && sma20 > sma50) tpath = "MAJOR";
+    else if (c > sma200) tpath = "MINOR";
+    else tpath = "WEAK";
+    
+    const { state, stateNum } = determineIndexState(mi, tpath, miPhase);
+    
+    // Calculate weekly/monthly MI (simplified - using longer windows)
+    const miW = data.length >= 7 ? (data[data.length - 7].rsi_14 ?? 50) : mi;
+    const miM = data.length >= 30 ? (data[data.length - 30].rsi_14 ?? 50) : mi;
+    const dMI_W = mi - miW;
+    
+    // Volume ratio
+    const vol = last.volume ?? 0;
+    const avgVol = data.slice(-20).reduce((s, d) => s + (d.volume ?? 0), 0) / 20;
+    const volX = avgVol > 0 ? vol / avgVol : 1;
+    
+    overviews.push({
+      symbol,
+      state,
+      stateNum,
+      mi,
+      miPhase,
+      tpath,
+      miD: mi,
+      miW,
+      miM,
+      dMI_D,
+      dMI_W,
+      bqs: 50, // Base quality score (placeholder)
+      rqs: 50, // Retest quality score (placeholder)
+      volX,
+    });
+  }
+  
+  return overviews;
+}
+
+function calcLayer1Ceiling(indices: IndexOverview[]): Layer1Ceiling {
+  const vnindex = indices.find(i => i.symbol === "VNINDEX");
+  const details: string[] = [];
+  let score = 0;
+  
+  if (!vnindex) {
+    return {
+      score: 0,
+      signal: "NEUTRAL",
+      label: "CEILING",
+      details: ["No VNINDEX data"],
+      status: "CLEAR",
+      broken: false,
+      weak: false,
+      badge: "CLEAR",
+    };
+  }
+  
+  // Check if at ceiling (resistance)
+  const MI_CEILING_THRESHOLD = 35; // Below this indicates ceiling hit
+  const MI_WEAK_THRESHOLD = 45; // Below this indicates weak momentum
+  const atCeiling = vnindex.stateNum === 7 || vnindex.mi < MI_CEILING_THRESHOLD;
+  const weak = vnindex.miPhase === "LOW" || vnindex.mi < MI_WEAK_THRESHOLD;
+  const broken = vnindex.tpath === "WEAK";
+  
+  if (atCeiling) {
+    score -= 50;
+    details.push("VNINDEX at ceiling/resistance");
+  }
+  if (broken) {
+    score -= 30;
+    details.push("Broken: Yes");
+  }
+  if (weak) {
+    score -= 20;
+    details.push("Weak: Yes");
+  }
+  
+  const status: CeilingStatus = atCeiling ? "BLOCKED" : "CLEAR";
+  const badge = status === "BLOCKED" ? "LIMITED" : "CLEAR";
+  
+  if (!atCeiling && !weak) {
+    score += 50;
+    details.push("Ceiling clear");
+  }
+  
+  return {
+    score: Math.max(-100, Math.min(100, score)),
+    signal: layerSignal(score),
+    label: "CEILING",
+    details,
+    status,
+    broken,
+    weak,
+    badge,
+  };
+}
+
+function calcLayer2Components(indices: IndexOverview[]): Layer2Components {
+  const vn30 = indices.find(i => i.symbol === "VN30");
+  const vnmid = indices.find(i => i.symbol === "VNMID");
+  const details: string[] = [];
+  let score = 0;
+  
+  if (!vn30 || !vnmid) {
+    return {
+      score: 0,
+      signal: "NEUTRAL",
+      label: "COMPONENTS",
+      details: ["Missing component data"],
+      status: "SYNC",
+      vn30Status: "NEUTRAL",
+      vnmidStatus: "NEUTRAL",
+      vn30dMI: 0,
+      vnmiddMI: 0,
+      rotation: "None",
+      badge: "CHECK",
+    };
+  }
+  
+  // Determine component status based on dMI
+  const vn30Status = vn30.dMI_D > 10 ? "OUTPERFORM" : vn30.dMI_D < -10 ? "UNDERPERFORM" : "NEUTRAL";
+  const vnmidStatus = vnmid.dMI_D > 10 ? "OUTPERFORM" : vnmid.dMI_D < -10 ? "UNDERPERFORM" : "NEUTRAL";
+  
+  details.push(`VN30: ${vn30Status} (dMI: ${vn30.dMI_D >= 0 ? '+' : ''}${vn30.dMI_D.toFixed(0)})`);
+  details.push(`VNMID: ${vnmidStatus} (dMI: ${vnmid.dMI_D >= 0 ? '+' : ''}${vnmid.dMI_D.toFixed(0)})`);
+  
+  // Check for rotation
+  let rotation = "None";
+  const bothOutperform = vn30Status === "OUTPERFORM" && vnmidStatus === "OUTPERFORM";
+  const bothUnderperform = vn30Status === "UNDERPERFORM" && vnmidStatus === "UNDERPERFORM";
+  
+  if (vn30Status === "OUTPERFORM" && vnmidStatus === "UNDERPERFORM") {
+    rotation = "VN30 Leading";
+  } else if (vn30Status === "UNDERPERFORM" && vnmidStatus === "OUTPERFORM") {
+    rotation = "VNMID Leading";
+  }
+  
+  const status: RotationStatus = bothOutperform || bothUnderperform ? "SYNC" : "DESYNC";
+  
+  // Scoring
+  if (bothOutperform) {
+    score += 50;
+    details.push("Components synchronized (both strong)");
+  } else if (bothUnderperform) {
+    score -= 50;
+    details.push("Components synchronized (both weak)");
+  } else {
+    score += 0;
+    details.push("Rotation detected");
+  }
+  
+  const badge = status === "SYNC" ? "CHECK" : "ROTATING";
+  
+  return {
+    score: Math.max(-100, Math.min(100, score)),
+    signal: layerSignal(score),
+    label: "COMPONENTS",
+    details,
+    status,
+    vn30Status,
+    vnmidStatus,
+    vn30dMI: vn30.dMI_D,
+    vnmiddMI: vnmid.dMI_D,
+    rotation,
+    badge,
+  };
+}
+
+function calcLayer3BreadthV2(indices: IndexOverview[]): Layer3Breadth {
+  const details: string[] = [];
+  let score = 0;
+  
+  // Get breadth data for each index
+  // For now, use simplified calculation based on index MI
+  const vn30 = indices.find(i => i.symbol === "VN30");
+  const vnmid = indices.find(i => i.symbol === "VNMID");
+  const vnindex = indices.find(i => i.symbol === "VNINDEX");
+  
+  // Simulate breadth % (in real impl, would fetch actual stock breadth)
+  const vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.9 - 5)) : 50;
+  const vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.85 - 5)) : 50;
+  const allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.87 - 5)) : 50;
+  
+  // Calculate slopes (simplified - using dMI as proxy)
+  const vn30Slope = vn30 ? vn30.dMI_D * 0.5 : 0;
+  const vnmidSlope = vnmid ? vnmid.dMI_D * 0.5 : 0;
+  const allSlope = vnindex ? vnindex.dMI_D * 0.5 : 0;
+  
+  // Determine quadrants
+  const vn30Quadrant = determineBreadthQuadrant(vn30AboveEMA50, vn30Slope);
+  const vnmidQuadrant = determineBreadthQuadrant(vnmidAboveEMA50, vnmidSlope);
+  const allStockQuadrant = determineBreadthQuadrant(allStockAboveEMA50, allSlope);
+  
+  const vn30Breadth: BreadthIndex = {
+    symbol: "VN30",
+    quadrant: vn30Quadrant,
+    aboveEMA50Pct: vn30AboveEMA50,
+    slope5d: vn30Slope,
+  };
+  
+  const vnmidBreadth: BreadthIndex = {
+    symbol: "VNMID",
+    quadrant: vnmidQuadrant,
+    aboveEMA50Pct: vnmidAboveEMA50,
+    slope5d: vnmidSlope,
+  };
+  
+  details.push(`VN30: ${vn30Quadrant} ${vn30AboveEMA50.toFixed(1)}% (s ${vn30Slope >= 0 ? '+' : ''}${vn30Slope.toFixed(1)})`);
+  details.push(`VNMID: ${vnmidQuadrant} ${vnmidAboveEMA50.toFixed(1)}% (s ${vnmidSlope >= 0 ? '+' : ''}${vnmidSlope.toFixed(1)})`);
+  details.push(`All: ${allStockQuadrant}: ${allStockAboveEMA50.toFixed(1)}%`);
+  
+  // Determine base stance
+  let base: string;
+  if (allStockQuadrant === "Q1") base = "AGG"; // Aggressive
+  else if (allStockQuadrant === "Q2" || allStockQuadrant === "Q4") base = "NEU"; // Neutral
+  else base = "CAU"; // Cautious
+  
+  // Determine badge
+  let badge: string;
+  if (vn30Quadrant === "Q3" && vnmidQuadrant === "Q3" && allStockQuadrant === "Q3") {
+    badge = "ALL_WEAK";
+    score -= 70;
+  } else if (vn30Quadrant === "Q1" && vnmidQuadrant === "Q1" && allStockQuadrant === "Q1") {
+    badge = "ALL_STRONG";
+    score += 70;
+  } else {
+    badge = "MIXED";
+    score += 0;
+  }
+  
+  details.push(`Base: ${base}`);
+  
+  return {
+    score: Math.max(-100, Math.min(100, score)),
+    signal: layerSignal(score),
+    label: "BREADTH",
+    details,
+    allStockQuadrant,
+    vn30Breadth,
+    vnmidBreadth,
+    allStockAboveEMA50,
+    base,
+    badge,
+  };
+}
+
+function calcLayer4Output(
+  layer1: Layer1Ceiling,
+  layer2: Layer2Components,
+  layer3: Layer3Breadth,
+): Layer4Output {
+  const details: string[] = [];
+  
+  // Combine layer scores with weights
+  const totalScore = Math.round(
+    layer1.score * 0.3 +
+    layer2.score * 0.3 +
+    layer3.score * 0.4
+  );
+  
+  details.push(`Base: ${layer3.base} → Ceiling: ${layer1.status}`);
+  
+  // Determine direction
+  let direction: string;
+  if (layer2.status === "SYNC" && layer2.vn30Status === "OUTPERFORM") {
+    direction = "IMPROVING";
+  } else if (layer2.status === "SYNC" && layer2.vn30Status === "UNDERPERFORM") {
+    direction = "DETERIORATING";
+  } else {
+    direction = "STABLE";
+  }
+  
+  details.push(`Dir: ${direction} | Mode: ${layer1.status === "BLOCKED" ? "BLOCKED" : "STABLE"}`);
+  
+  // Determine mode
+  let mode: RegimeMode;
+  const allIndicesExit = layer1.status === "BLOCKED" && layer1.weak;
+  if (allIndicesExit) {
+    mode = "BLOCKED";
+  } else if (layer2.rotation !== "None") {
+    mode = "ROTATING";
+  } else {
+    mode = "STABLE";
+  }
+  
+  details.push(`Lead: ${layer3.badge}`);
+  
+  // Determine final badge
+  let badge: string;
+  if (totalScore >= 40) badge = "HIGH";
+  else if (totalScore >= -10) badge = "MED";
+  else badge = "LOW";
+  
+  return {
+    score: totalScore,
+    signal: layerSignal(totalScore),
+    label: "OUTPUT",
+    details,
+    base: layer3.base,
+    ceilingStatus: layer1.status,
+    direction,
+    mode,
+    lead: layer3.badge,
+    badge,
+  };
+}
+
+// ==================== LEGACY LAYER FUNCTIONS ====================
 
 function calcIndexLayer(vnindex: IndexData[]): MarketRegime["indexLayer"] {
   const details: string[] = [];
@@ -754,57 +1234,90 @@ function buildRegime(
   breadthLayer: MarketRegime["breadthLayer"],
   momentumLayer: MarketRegime["momentumLayer"],
   flowLayer: MarketRegime["flowLayer"],
+  layer1Ceiling: Layer1Ceiling,
+  layer2Components: Layer2Components,
+  layer3Breadth: Layer3Breadth,
+  layer4Output: Layer4Output,
+  indices: IndexOverview[],
 ): MarketRegime {
-  // Weighted average: INDEX 35%, BREADTH 25%, MOMENTUM 25%, FLOW 15%
-  const totalScore = Math.round(
-    indexLayer.score * 0.35 +
-    breadthLayer.score * 0.25 +
-    momentumLayer.score * 0.25 +
-    flowLayer.score * 0.15
-  );
-
+  // Use the new 4-layer model for regime determination
+  const totalScore = layer4Output.score;
+  
   let regime: RegimeState;
-  if (totalScore >= 25) regime = "BULL";
-  else if (totalScore <= -25) regime = "BEAR";
-  else regime = "NEUTRAL";
+  // Check for BLOCKED mode first
+  if (layer4Output.mode === "BLOCKED") {
+    regime = "BLOCKED";
+  } else if (totalScore >= 25) {
+    regime = "BULL";
+  } else if (totalScore <= -25) {
+    regime = "BEAR";
+  } else {
+    regime = "NEUTRAL";
+  }
 
   let allocation: string;
   let allocDesc: string;
-  if (regime === "BULL") {
+  if (regime === "BLOCKED") {
+    allocation = "0%";
+    allocDesc = "BLOCKED. Tất cả chỉ số EXIT. Không giao dịch. Chờ phục hồi.";
+  } else if (regime === "BULL") {
     allocation = "80-100%";
     allocDesc = "Ưu tiên giải ngân. Tìm Tier 1A/2A. Giữ vị thế Trend.";
   } else if (regime === "NEUTRAL") {
     allocation = "40-60%";
     allocDesc = "Chọn lọc. Chỉ Tier 1A. Giảm size. Bảo vệ vốn.";
   } else {
-    allocation = "0-20%";
+    allocation = "0-10%";
     allocDesc = "Phòng thủ. Không mở mới. Chờ tín hiệu phục hồi.";
   }
 
   return {
-    regime, score: totalScore, allocation, allocDesc,
-    indexLayer, breadthLayer, momentumLayer, flowLayer,
+    regime,
+    score: totalScore,
+    allocation,
+    allocDesc,
+    layer1Ceiling,
+    layer2Components,
+    layer3Breadth,
+    layer4Output,
+    indices,
+    // Legacy layers for backward compatibility
+    indexLayer,
+    breadthLayer,
+    momentumLayer,
+    flowLayer,
   };
 }
 
-// ==================== MAIN ANALYSIS ====================
-
-export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
-  // Step 1: Get all data sources in parallel
-  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw] = await Promise.all([
+/**
+ * Run full stock analysis on universe with GTGD >= 10B VND.
+ * GTGD = Giá trị giao dịch (trading value) = price * volume, in billion VND.
+ * 
+ * @param _topN Deprecated parameter (now ignored). Filter is based on GTGD >= 10B.
+ * @deprecated topN parameter - use GTGD filter instead
+ */
+export async function runFullAnalysis(_topN = 200): Promise<AnalysisResult> {
+  // Step 1: Get all data sources in parallel, including new 4-layer index data
+  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
     getIndexHistory("VNINDEX").catch(() => [] as IndexData[]),
     getMarketBreadth().catch(() => [] as MarketBreadth[]),
     getForeignFlow().catch(() => [] as ForeignFlow[]),
+    calcIndexOverviews(), // New 4-layer index data
   ]);
 
   // Cast vnindex data (IndexData has all the fields we need for StockOHLCV)
   const vnindexData = vnindexRaw as unknown as StockOHLCV[];
 
-  // Calculate Index Layer immediately (doesn't depend on stock analysis)
+  // Calculate legacy layers (for backward compatibility)
   const indexLayer = calcIndexLayer(vnindexRaw);
   const breadthLayer = calcBreadthLayer(breadthRaw);
+  
+  // Calculate new 4-layer model
+  const layer1Ceiling = calcLayer1Ceiling(indices);
+  const layer2Components = calcLayer2Components(indices);
+  const layer3Breadth = calcLayer3BreadthV2(indices);
 
   // Step 2: Build lookup maps
   const ratiosMap = new Map<string, CompanyRatios>();
@@ -850,11 +1363,12 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
       gtgd,
     };
   })
-    .filter((s) => s.closePrice > 0)
-    .sort((a, b) => b.marketCap - a.marketCap);
+    .filter((s) => s.closePrice > 0 && s.gtgd >= 10) // gtgd is in billion VND (tỷ VND), filter >= 10
+    .sort((a, b) => b.gtgd - a.gtgd); // Sort by GTGD (liquidity) instead of market cap
 
-  // Step 4: Take top N symbols for detailed analysis (no strict GTGD filter)
-  const toAnalyze = universe.slice(0, topN);
+  // Step 4: Analyze ALL stocks with GTGD >= 10B (not limited to topN)
+  // Note: topN parameter is deprecated and ignored in favor of GTGD filter
+  const toAnalyze = universe;
 
   // Step 5: Batch fetch price histories
   const toStocks: TOStock[] = [];
@@ -945,7 +1459,18 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
   // Calculate remaining regime layers
   const momentumLayer = calcMomentumLayer(toStocks);
   const flowLayer = calcFlowLayer(flowRaw);
-  const regime = buildRegime(indexLayer, breadthLayer, momentumLayer, flowLayer);
+  const layer4Output = calcLayer4Output(layer1Ceiling, layer2Components, layer3Breadth);
+  const regime = buildRegime(
+    indexLayer, 
+    breadthLayer, 
+    momentumLayer, 
+    flowLayer,
+    layer1Ceiling,
+    layer2Components,
+    layer3Breadth,
+    layer4Output,
+    indices,
+  );
 
   return {
     totalStocks: toStocks.length,
@@ -956,12 +1481,16 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
     counts: {
       prime: toStocks.filter((s) => s.qtier === "PRIME").length,
       valid: toStocks.filter((s) => s.qtier === "VALID").length,
+      watch: toStocks.filter((s) => s.qtier === "WATCH").length,
+      avoid: toStocks.filter((s) => s.qtier === "AVOID").length,
       tier1a: toTiers.tier1a.length,
       tier2a: toTiers.tier2a.length,
       active: rsStocks.filter((s) => s.isActive).length,
-      sync: rsCats.sync_active.length,
-      dLead: rsCats.d_lead_active.length,
-      mLead: rsCats.m_lead_active.length,
+      sync: rsStocks.filter((s) => s.vector === "SYNC").length,
+      dLead: rsStocks.filter((s) => s.vector === "D_LEAD").length,
+      mLead: rsStocks.filter((s) => s.vector === "M_LEAD").length,
+      weak: rsStocks.filter((s) => s.bucket === "WEAK").length,
+      neut: rsStocks.filter((s) => s.vector === "NEUT").length,
     },
     regime,
     generatedAt: new Date().toISOString(),
