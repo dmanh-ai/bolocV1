@@ -17,6 +17,7 @@ import {
   getMarketBreadth,
   getForeignFlow,
   computeRealBreadth,
+  fetchAllSymbols,
   type StockOHLCV,
   type CompanyRatios,
   type IndexData,
@@ -1335,16 +1336,17 @@ function buildRegime(
 }
 
 /**
- * Run full stock analysis on top N stocks by trading value (GTGD).
+ * Run full stock analysis on ALL stocks with CSV price data.
+ * Fetches symbols from GitHub repo (data/stocks/*.csv) + metadata + ratios.
  * GTGD = Giá trị giao dịch (trading value) = price * volume, in billion VND.
- * 
- * @param topN Number of stocks with highest trading value to analyze (default: 9999)
+ * Display filter: GTGD >= 10 tỷ for liquid stocks.
  */
-export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
+export async function runFullAnalysis(): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel, including new 4-layer index data
-  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices, realBreadth] = await Promise.all([
+  const [stockList, allRatios, allCsvSymbols, vnindexRaw, breadthRaw, flowRaw, indices, realBreadth] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
+    fetchAllSymbols(),
     getIndexHistory("VNINDEX").catch(() => [] as IndexData[]),
     getMarketBreadth().catch(() => [] as MarketBreadth[]),
     getForeignFlow().catch(() => [] as ForeignFlow[]),
@@ -1375,11 +1377,12 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
     if (s.symbol) tradingMap.set(s.symbol.toUpperCase(), s);
   });
 
-  // Step 3: Build universe from BOTH company_ratios AND trading_stats
-  // Use company_ratios as base (400+ stocks), enrich with trading data
-  // CHANGED: Include ALL symbols even without trading_stats, defaulting to 0 for missing values
-  // Price history CSVs will be used to compute actual values during batch processing
+  // Step 3: Build universe from ALL sources (CSV files + ratios + trading_stats)
+  // allCsvSymbols = all stocks with CSV price data in data/stocks/ (1093+)
+  // allRatios = stocks with financial data (400+)
+  // stockList = stocks from metadata + trading_stats
   const symbolSet = new Set<string>();
+  allCsvSymbols.forEach((s) => symbolSet.add(s));
   allRatios.forEach((r) => { if (r.symbol) symbolSet.add(r.symbol.toUpperCase()); });
   stockList.forEach((s) => { if (s.symbol) symbolSet.add(s.symbol.toUpperCase()); });
 
@@ -1418,10 +1421,9 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
     // successfully analyzed in batch processing; those without will be naturally excluded
     // when getPriceHistory fails or returns insufficient data (< 10 rows).
     // Note: gtgd values are non-negative by construction (see lines 1395-1399)
-    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD descending (0 values sort to end)
-    .slice(0, topN); // Top N by trading value; topN defaults to 9999 (effectively all stocks)
+    .sort((a, b) => b.gtgd - a.gtgd); // Sort by GTGD descending (0 values sort to end)
 
-  // Step 4: Analyze top N stocks by GTGD
+  // Step 4: Analyze ALL stocks — stocks without CSV will fail silently in batch
   const toAnalyze = universe;
 
   // Step 5: Batch fetch price histories

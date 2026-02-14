@@ -93,24 +93,48 @@ export interface StockListItem {
 }
 
 /**
- * Fetch all available symbols from metadata/symbols_by_industry.csv.
- * This file contains the complete list of all stocks in the vnstock repository.
- * Falls back to an empty array if the file cannot be fetched.
- * 
+ * Fetch all available stock symbols that have CSV price data.
+ *
+ * Strategy (ordered by reliability):
+ * 1. GitHub Trees API: lists all files in data/stocks/ → definitive source
+ * 2. Metadata CSV: metadata/symbols_by_industry.csv → 1066+ symbols
+ * 3. Empty array (fallback)
+ *
  * @returns Array of symbol strings (normalized to uppercase)
  */
-async function fetchAllSymbols(): Promise<string[]> {
+export async function fetchAllSymbols(): Promise<string[]> {
+  // Try GitHub Trees API first — gives us exactly which CSVs exist
+  try {
+    const res = await fetch(
+      "https://api.github.com/repos/dmanh-ai/vnstock/git/trees/main:data/stocks",
+      { headers: { "Accept": "application/vnd.github.v3+json" } }
+    );
+    if (res.ok) {
+      const json = await res.json();
+      if (json.tree && Array.isArray(json.tree)) {
+        const symbols = json.tree
+          .filter((f: { path: string; type: string }) => f.type === "blob" && f.path.endsWith(".csv"))
+          .map((f: { path: string }) => f.path.replace(".csv", "").toUpperCase());
+        if (symbols.length > 100) return [...new Set(symbols)] as string[];
+      }
+    }
+  } catch {
+    // GitHub API might be rate-limited, fall through
+  }
+
+  // Fallback: metadata CSV
   try {
     const data = await fetchCSV("metadata/symbols_by_industry.csv");
     const symbols = data
       .map((row) => row.symbol)
       .filter((s) => s && s.trim().length > 0)
-      .map((s) => s.toUpperCase()); // Normalize to uppercase for consistent lookups
-    return [...new Set(symbols)]; // Remove duplicates
+      .map((s) => s.toUpperCase());
+    if (symbols.length > 0) return [...new Set(symbols)];
   } catch (error) {
     console.error("Failed to fetch symbol list from metadata:", error);
-    return [];
   }
+
+  return [];
 }
 
 /**
