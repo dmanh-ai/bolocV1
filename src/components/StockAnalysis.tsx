@@ -16,9 +16,10 @@ import {
   TrendingDown,
   Minus,
   XCircle,
+  Sparkles,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, type ReactNode } from 'react';
 import {
   runFullAnalysis,
   TO_TIERS,
@@ -863,6 +864,221 @@ function AnalysisLoading() {
   );
 }
 
+// ==================== MARKDOWN RENDERER ====================
+
+function formatInline(text: string): ReactNode {
+  const parts = text.split(/\*\*(.*?)\*\*/g);
+  if (parts.length === 1) return text;
+  return parts.map((part, j) =>
+    j % 2 === 1 ? <strong key={j} className="text-zinc-100 font-bold">{part}</strong> : part
+  );
+}
+
+function SimpleMarkdown({ text }: { text: string }) {
+  return (
+    <div className="space-y-0.5">
+      {text.split('\n').map((line, i) => {
+        if (line.startsWith('## ')) {
+          return <h3 key={i} className="text-base font-bold text-zinc-100 mt-5 mb-2 border-b border-zinc-800 pb-1">{formatInline(line.slice(3))}</h3>;
+        }
+        if (line.startsWith('### ')) {
+          return <h4 key={i} className="text-sm font-bold text-amber-400 mt-3 mb-1">{formatInline(line.slice(4))}</h4>;
+        }
+        if (line.startsWith('- ') || line.startsWith('• ')) {
+          return <p key={i} className="text-sm text-zinc-300 pl-4 py-0.5">{formatInline('• ' + line.slice(2))}</p>;
+        }
+        if (/^\d+\.\s/.test(line)) {
+          return <p key={i} className="text-sm text-zinc-300 pl-2 py-0.5">{formatInline(line)}</p>;
+        }
+        if (line.trim() === '') {
+          return <div key={i} className="h-1.5" />;
+        }
+        return <p key={i} className="text-sm text-zinc-300 py-0.5">{formatInline(line)}</p>;
+      })}
+    </div>
+  );
+}
+
+// ==================== AI RECOMMENDATION TAB ====================
+
+function AIRecommendationTab({ data }: { data: AnalysisResult }) {
+  const [recommendation, setRecommendation] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [analyzedAt, setAnalyzedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const generateSummary = useCallback(() => {
+    const regime = data.regime;
+    const dist = data.distribution;
+
+    let s = `=== MARKET DASHBOARD V3 ===\n`;
+    s += `Generated: ${data.generatedAt}\n`;
+    s += `Total Stocks Analyzed: ${data.totalStocks}\n\n`;
+
+    // Market Regime
+    s += `--- MARKET REGIME ---\n`;
+    s += `State: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+    s += `Layer 1 (VNINDEX Ceiling): ${regime.layer1Ceiling.status} | Broken: ${regime.layer1Ceiling.broken} | Weak: ${regime.layer1Ceiling.weak}\n`;
+    s += `Layer 2 (Components): VN30 ${regime.layer2Components.vn30Status} dMI:${regime.layer2Components.vn30dMI.toFixed(0)} | VNMID ${regime.layer2Components.vnmidStatus} dMI:${regime.layer2Components.vnmiddMI.toFixed(0)} | Rotation: ${regime.layer2Components.rotation}\n`;
+    s += `Layer 3 (Breadth): AllStock ${regime.layer3Breadth.allStockQuadrant} ${regime.layer3Breadth.allStockAboveEMA50.toFixed(1)}% | Signal: ${regime.layer3Breadth.signal} | Base: ${regime.layer3Breadth.base}\n`;
+    s += `  VN30: ${regime.layer3Breadth.vn30Breadth.quadrant} ${regime.layer3Breadth.vn30Breadth.aboveEMA50Pct.toFixed(0)}% slope5d:${regime.layer3Breadth.vn30Breadth.slope5d.toFixed(1)}\n`;
+    s += `  VNMID: ${regime.layer3Breadth.vnmidBreadth.quadrant} ${regime.layer3Breadth.vnmidBreadth.aboveEMA50Pct.toFixed(0)}% slope5d:${regime.layer3Breadth.vnmidBreadth.slope5d.toFixed(1)}\n`;
+    s += `Layer 4 (Output): ${regime.regime} | Dir: ${regime.layer4Output.direction} | Mode: ${regime.layer4Output.mode} | Lead: ${regime.layer4Output.lead}\n\n`;
+
+    // Index Overview
+    s += `--- INDEX OVERVIEW ---\n`;
+    for (const idx of regime.indices) {
+      const price = idx.close || 0;
+      const chgPct = idx.changePct ?? 0;
+      s += `${idx.symbol}: ${price > 0 ? price.toLocaleString('en', { maximumFractionDigits: 2 }) : 'N/A'} ${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}% State:${idx.state} MI:${idx.mi.toFixed(0)} Phase:${idx.miPhase} TPath:${idx.tpath} MI_D/W/M:${idx.miD.toFixed(0)}/${idx.miW.toFixed(0)}/${idx.miM.toFixed(0)} dMI_D:${idx.dMI_D >= 0 ? '+' : ''}${idx.dMI_D.toFixed(1)}\n`;
+    }
+    s += '\n';
+
+    // Distribution
+    const qTotal = dist.qtier.total || 1;
+    const rTotal = dist.rsVector.total || 1;
+    s += `--- DISTRIBUTION ---\n`;
+    s += `QTier (${qTotal} stocks): PRIME=${dist.qtier.prime}(${((dist.qtier.prime / qTotal) * 100).toFixed(0)}%) VALID=${dist.qtier.valid}(${((dist.qtier.valid / qTotal) * 100).toFixed(0)}%) WATCH=${dist.qtier.watch}(${((dist.qtier.watch / qTotal) * 100).toFixed(0)}%) AVOID=${dist.qtier.avoid}(${((dist.qtier.avoid / qTotal) * 100).toFixed(0)}%)\n`;
+    s += `RS Vector (${rTotal}): SYNC=${dist.rsVector.sync} D_LEAD=${dist.rsVector.dLead} M_LEAD=${dist.rsVector.mLead} WEAK=${dist.rsVector.weak} NEUT=${dist.rsVector.neut}\n\n`;
+
+    // TO Tiers
+    s += `--- TO BEST SETUPS ---\n`;
+    for (const tier of TO_TIERS) {
+      const stocks = data.toTiers[tier.key] || [];
+      s += `\n${tier.name} (${stocks.length} stocks) — ${tier.description}:\n`;
+      for (const st of stocks.slice(0, 15)) {
+        s += `  ${st.symbol} Price:${st.price.toLocaleString()} Chg:${st.changePct >= 0 ? '+' : ''}${st.changePct.toFixed(1)}% State:${st.state} TP:${st.tpaths} MTF:${st.mtf} QT:${st.qtier} MIPh:${st.miph} MI:${st.mi} Rank:${st.rank} GTGD:${st.gtgd}\n`;
+      }
+      if (stocks.length > 15) s += `  ... and ${stocks.length - 15} more\n`;
+    }
+
+    // RS Categories
+    s += `\n--- RS BEST SETUPS ---\n`;
+    for (const cat of RS_CATEGORIES) {
+      const stocks = data.rsCats[cat.key] || [];
+      s += `\n${cat.name} (${stocks.length} stocks) — ${cat.description}:\n`;
+      for (const st of stocks.slice(0, 10)) {
+        s += `  ${st.symbol} Price:${st.price.toLocaleString()} Chg:${st.changePct >= 0 ? '+' : ''}${st.changePct.toFixed(1)}% RSState:${st.rsState} Vector:${st.vector} Bucket:${st.bucket} RS%:${st.rsPct >= 0 ? '+' : ''}${st.rsPct.toFixed(1)}% Score:${st.score}\n`;
+      }
+      if (stocks.length > 10) s += `  ... and ${stocks.length - 10} more\n`;
+    }
+
+    return s;
+  }, [data]);
+
+  const analyze = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    setRecommendation('');
+
+    try {
+      const summary = generateSummary();
+
+      const response = await fetch('/api/ai-recommendation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dashboardSummary: summary }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(errData.error || `API error: ${response.status}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+        setRecommendation(text);
+      }
+
+      setAnalyzedAt(new Date().toLocaleString('vi-VN'));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Lỗi không xác định';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [generateSummary]);
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-amber-400" />
+            Khuyến nghị AI
+          </h3>
+          <p className="text-xs text-zinc-500">Claude AI phân tích toàn bộ dashboard và đưa ra khuyến nghị đầu tư</p>
+        </div>
+        <Button
+          onClick={analyze}
+          disabled={isLoading}
+          size="sm"
+          variant="outline"
+          className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+        >
+          {isLoading ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              Đang phân tích...
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-3.5 h-3.5" />
+              {recommendation ? 'Phân tích lại' : 'Phân tích bằng AI'}
+            </>
+          )}
+        </Button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="rounded-lg border border-red-800 bg-red-900/20 p-3">
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* Result */}
+      {recommendation ? (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          {analyzedAt && (
+            <div className="flex items-center gap-1 mb-4 text-xs text-zinc-600">
+              <Clock className="w-3 h-3" />
+              Phân tích lúc {analyzedAt}
+            </div>
+          )}
+          <SimpleMarkdown text={recommendation} />
+          {isLoading && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              Đang tạo phân tích...
+            </div>
+          )}
+        </div>
+      ) : !isLoading ? (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-10 text-center">
+          <Sparkles className="w-10 h-10 text-amber-500 mx-auto mb-4" />
+          <p className="text-sm text-zinc-400 max-w-md mx-auto">
+            Nhấn <strong className="text-zinc-200">&quot;Phân tích bằng AI&quot;</strong> để Claude phân tích toàn bộ dữ liệu dashboard
+            (Market Regime, TO Tiers, RS Categories) và đưa ra khuyến nghị đầu tư trực tiếp.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-8 text-center">
+          <RefreshCw className="w-8 h-8 text-amber-500 mx-auto mb-3 animate-spin" />
+          <p className="text-sm text-zinc-400">Claude đang phân tích {data.totalStocks} mã cổ phiếu...</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ==================== SCREENER TAB ====================
 
 function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RSStock[] }) {
@@ -996,7 +1212,7 @@ export function StockAnalysis() {
         <AnalysisLoading />
       ) : (
         <Tabs defaultValue="to" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3 h-auto p-1 bg-zinc-900 border border-zinc-800">
+          <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-zinc-900 border border-zinc-800">
             <TabsTrigger
               value="to"
               className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
@@ -1023,6 +1239,13 @@ export function StockAnalysis() {
             >
               <BarChart3 className="w-4 h-4" />
               <span className="font-bold text-sm">Screener</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="ai"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span className="font-bold text-sm">AI</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1092,6 +1315,11 @@ export function StockAnalysis() {
           {/* ========= SCREENER TAB ========= */}
           <TabsContent value="screener" className="space-y-4">
             <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} />
+          </TabsContent>
+
+          {/* ========= AI RECOMMENDATION TAB ========= */}
+          <TabsContent value="ai" className="space-y-4">
+            <AIRecommendationTab data={data} />
           </TabsContent>
         </Tabs>
       )}
