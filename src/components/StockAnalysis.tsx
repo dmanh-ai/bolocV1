@@ -68,6 +68,7 @@ const QTIER_COLORS: Record<QTier, string> = {
   PRIME: 'bg-green-500 text-white',
   VALID: 'bg-blue-500 text-white',
   WATCH: 'bg-zinc-600 text-zinc-300',
+  AVOID: 'bg-red-600 text-white',
 };
 
 const MIPH_COLORS: Record<MIPhase, string> = {
@@ -725,13 +726,18 @@ export function StockAnalysis() {
               <StatCard label="Total" value={data.totalStocks} />
               <StatCard label="PRIME" value={data.counts.prime} color="text-green-400" />
               <StatCard label="VALID" value={data.counts.valid} color="text-blue-400" />
-              <StatCard label="Tier 1A" value={data.counts.tier1a} color="text-green-400" />
-              <StatCard label="Tier 2A" value={data.counts.tier2a} color="text-blue-400" />
+              <StatCard label="WATCH" value={data.counts.watch} color="text-zinc-400" />
+              <StatCard label="AVOID" value={data.counts.avoid} color="text-red-400" />
               <StatCard
                 label="Setups"
                 value={TO_TIERS.reduce((sum, t) => sum + (data.toTiers[t.key]?.length || 0), 0)}
                 color="text-amber-400"
               />
+            </div>
+
+            {/* Distribution Summary */}
+            <div className="text-xs text-zinc-400 space-y-1">
+              <div>QualityTier Distribution ({data.totalStocks} stocks): PRIME {data.counts.prime} ({((data.counts.prime/data.totalStocks)*100).toFixed(1)}%), VALID {data.counts.valid} ({((data.counts.valid/data.totalStocks)*100).toFixed(1)}%), WATCH {data.counts.watch} ({((data.counts.watch/data.totalStocks)*100).toFixed(1)}%), AVOID {data.counts.avoid} ({((data.counts.avoid/data.totalStocks)*100).toFixed(1)}%)</div>
             </div>
 
             {/* Tier Sections */}
@@ -758,6 +764,11 @@ export function StockAnalysis() {
               <StatCard label="SYNC" value={data.counts.sync} color="text-green-400" />
               <StatCard label="D_LEAD" value={data.counts.dLead} color="text-blue-400" />
               <StatCard label="M_LEAD" value={data.counts.mLead} color="text-cyan-400" />
+            </div>
+
+            {/* RS Vector Distribution Summary */}
+            <div className="text-xs text-zinc-400 space-y-1">
+              <div>RS Vector Distribution ({data.rsStocks.length} stocks): SYNC {data.counts.sync} ({((data.counts.sync/data.rsStocks.length)*100).toFixed(1)}%), D_LEAD {data.counts.dLead} ({((data.counts.dLead/data.rsStocks.length)*100).toFixed(1)}%), M_LEAD {data.counts.mLead} ({((data.counts.mLead/data.rsStocks.length)*100).toFixed(1)}%), NEUT {data.counts.neut} ({((data.counts.neut/data.rsStocks.length)*100).toFixed(1)}%), WEAK {data.counts.weak} ({((data.counts.weak/data.rsStocks.length)*100).toFixed(1)}%)</div>
             </div>
 
             {/* Category Sections */}
