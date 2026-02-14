@@ -336,7 +336,6 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
   if (data.length < 20) return { state: "WEAK", volRatio: 1, rqs: 0 };
 
   const l = data[data.length - 1];
-  const prev = data[data.length - 2];
   const c = l.close;
   const m20 = l.sma_20 ?? c;
   const m50 = l.sma_50 ?? c;
@@ -436,7 +435,6 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
   const npg = ratios.net_profit_growth !== undefined ? ratios.net_profit_growth * 100 : undefined;
   const rg = ratios.revenue_growth !== undefined ? ratios.revenue_growth * 100 : undefined;
   const npm = ratios.net_profit_margin !== undefined ? ratios.net_profit_margin * 100 : undefined;
-  const gm = ratios.gross_margin !== undefined ? ratios.gross_margin * 100 : undefined;
   const cr = ratios.current_ratio;
   const de = ratios.de;
   const pe = ratios.pe;
