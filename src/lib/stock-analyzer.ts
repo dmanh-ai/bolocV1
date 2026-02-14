@@ -1371,12 +1371,14 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
 
   // Step 3: Build universe from BOTH company_ratios AND trading_stats
   // Use company_ratios as base (400+ stocks), enrich with trading data
+  // CHANGED: Include ALL symbols even without trading_stats, defaulting to 0 for missing values
+  // Price history CSVs will be used to compute actual values during batch processing
   const symbolSet = new Set<string>();
   allRatios.forEach((r) => { if (r.symbol) symbolSet.add(r.symbol.toUpperCase()); });
   stockList.forEach((s) => { if (s.symbol) symbolSet.add(s.symbol.toUpperCase()); });
 
   // Compute market cap: close_price * issue_share
-  // If no trading data, estimate from pe * eps
+  // If no trading data, estimate from pe * eps or default to 0
   const universe = Array.from(symbolSet).map((sym) => {
     const ratios = ratiosMap.get(sym);
     const trading = tradingMap.get(sym);
@@ -1405,9 +1407,12 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
       gtgd,
     };
   })
-    .filter((s) => s.closePrice > 0 && s.gtgd > 0) // Filter stocks with valid trading data
-    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD (liquidity) instead of market cap
-    .slice(0, topN); // Top N by trading value
+    // REMOVED: Filter that excluded stocks without trading_stats (closePrice=0 or gtgd=0)
+    // Instead, all symbols are retained and sorted. Stocks with price history CSVs will be
+    // successfully analyzed in batch processing; those without will be naturally excluded
+    // when getPriceHistory fails or returns insufficient data (< 10 rows).
+    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD (liquidity), 0 values go to end
+    .slice(0, topN); // Top N by trading value (includes stocks with gtgd=0)
 
   // Step 4: Analyze top N stocks by GTGD
   const toAnalyze = universe;
