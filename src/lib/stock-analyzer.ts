@@ -647,7 +647,13 @@ function layerSignal(score: number): RegimeState {
 
 // ==================== 4-LAYER REGIME MODEL ====================
 
-function determineIndexState(mi: number, tpath: TrendPath, miph: MIPhase): { state: string; stateNum: number } {
+function determineIndexState(mi: number, tpath: TrendPath, miph: MIPhase, dMI_D?: number, dMI_W?: number): { state: string; stateNum: number } {
+  // EXIT override: deteriorating momentum overrides all other states
+  // Weekly momentum threshold: dMI_W < -5 indicates strong weekly decline
+  if (dMI_W !== undefined && dMI_W < -5) return { state: "7.EXIT", stateNum: 7 };
+  // Daily momentum threshold: dMI_D < -3 with mi < 70 indicates daily decline without strong peak
+  if (dMI_D !== undefined && dMI_D < -3 && mi < 70) return { state: "7.EXIT", stateNum: 7 };
+  
   // State numbering system based on MI and trend
   if (tpath === "S_MAJOR" && miph === "PEAK") return { state: "1.BREAKOUT", stateNum: 1 };
   if (tpath === "S_MAJOR" && miph === "HIGH") return { state: "2.CONFIRM", stateNum: 2 };
@@ -695,6 +701,11 @@ async function calcIndexOverviews(): Promise<IndexOverview[]> {
     const miPrev = prev.rsi_14 ?? 50;
     const dMI_D = mi - miPrev;
     
+    // Calculate weekly/monthly MI (simplified - using longer windows)
+    const miW = data.length >= 7 ? (data[data.length - 7].rsi_14 ?? 50) : mi;
+    const miM = data.length >= 30 ? (data[data.length - 30].rsi_14 ?? 50) : mi;
+    const dMI_W = mi - miW;
+    
     // Determine MI phase
     let miPhase: MIPhase;
     if (mi >= 70) miPhase = "PEAK";
@@ -714,12 +725,7 @@ async function calcIndexOverviews(): Promise<IndexOverview[]> {
     else if (c > sma200) tpath = "MINOR";
     else tpath = "WEAK";
     
-    const { state, stateNum } = determineIndexState(mi, tpath, miPhase);
-    
-    // Calculate weekly/monthly MI (simplified - using longer windows)
-    const miW = data.length >= 7 ? (data[data.length - 7].rsi_14 ?? 50) : mi;
-    const miM = data.length >= 30 ? (data[data.length - 30].rsi_14 ?? 50) : mi;
-    const dMI_W = mi - miW;
+    const { state, stateNum } = determineIndexState(mi, tpath, miPhase, dMI_D, dMI_W);
     
     // Volume ratio
     const vol = last.volume ?? 0;
@@ -766,11 +772,9 @@ function calcLayer1Ceiling(indices: IndexOverview[]): Layer1Ceiling {
   }
   
   // Check if at ceiling (resistance)
-  const MI_CEILING_THRESHOLD = 35; // Below this indicates ceiling hit
-  const MI_WEAK_THRESHOLD = 45; // Below this indicates weak momentum
-  const atCeiling = vnindex.stateNum === 7 || vnindex.mi < MI_CEILING_THRESHOLD;
-  const weak = vnindex.miPhase === "LOW" || vnindex.mi < MI_WEAK_THRESHOLD;
-  const broken = vnindex.tpath === "WEAK";
+  const atCeiling = vnindex.stateNum >= 6; // 6.WEAK or 7.EXIT = ceiling
+  const weak = vnindex.stateNum === 7 || vnindex.miPhase === "LOW";
+  const broken = vnindex.tpath === "WEAK" || vnindex.stateNum === 7;
   
   if (atCeiling) {
     score -= 50;
@@ -828,8 +832,8 @@ function calcLayer2Components(indices: IndexOverview[]): Layer2Components {
   }
   
   // Determine component status based on dMI
-  const vn30Status = vn30.dMI_D > 10 ? "OUTPERFORM" : vn30.dMI_D < -10 ? "UNDERPERFORM" : "NEUTRAL";
-  const vnmidStatus = vnmid.dMI_D > 10 ? "OUTPERFORM" : vnmid.dMI_D < -10 ? "UNDERPERFORM" : "NEUTRAL";
+  const vn30Status = vn30.dMI_D > 2 ? "OUTPERFORM" : vn30.dMI_D < -2 ? "UNDERPERFORM" : "NEUTRAL";
+  const vnmidStatus = vnmid.dMI_D > 2 ? "OUTPERFORM" : vnmid.dMI_D < -2 ? "UNDERPERFORM" : "NEUTRAL";
   
   details.push(`VN30: ${vn30Status} (dMI: ${vn30.dMI_D >= 0 ? '+' : ''}${vn30.dMI_D.toFixed(0)})`);
   details.push(`VNMID: ${vnmidStatus} (dMI: ${vnmid.dMI_D >= 0 ? '+' : ''}${vnmid.dMI_D.toFixed(0)})`);
@@ -887,9 +891,11 @@ function calcLayer3BreadthV2(indices: IndexOverview[]): Layer3Breadth {
   const vnindex = indices.find(i => i.symbol === "VNINDEX");
   
   // Simulate breadth % (in real impl, would fetch actual stock breadth)
-  const vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.9 - 5)) : 50;
-  const vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.85 - 5)) : 50;
-  const allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.87 - 5)) : 50;
+  // More conservative estimation that matches reference
+  // Reference: MI=66.6 → ~47% (previous formula incorrectly gave 54.9%)
+  const vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.75 - 3)) : 50;
+  const vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.65 - 2)) : 50;
+  const allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.70 - 2)) : 50;
   
   // Calculate slopes (simplified - using dMI as proxy)
   const vn30Slope = vn30 ? vn30.dMI_D * 0.5 : 0;
@@ -958,6 +964,7 @@ function calcLayer4Output(
   layer1: Layer1Ceiling,
   layer2: Layer2Components,
   layer3: Layer3Breadth,
+  indices: IndexOverview[], // Add this parameter
 ): Layer4Output {
   const details: string[] = [];
   
@@ -984,8 +991,11 @@ function calcLayer4Output(
   
   // Determine mode
   let mode: RegimeMode;
-  const allIndicesExit = layer1.status === "BLOCKED" && layer1.weak;
-  if (allIndicesExit) {
+  // Check if ALL indices are in EXIT state
+  const allIndicesExit = indices.length > 0 && indices.every(idx => idx.stateNum >= 7);
+  // Fallback: also BLOCKED if ceiling is blocked AND weak
+  const blocked = allIndicesExit || (layer1.status === "BLOCKED" && layer1.weak);
+  if (blocked) {
     mode = "BLOCKED";
   } else if (layer2.rotation !== "None") {
     mode = "ROTATING";
@@ -1461,7 +1471,7 @@ export async function runFullAnalysis(topN = 500): Promise<AnalysisResult> {
   // Calculate remaining regime layers
   const momentumLayer = calcMomentumLayer(toStocks);
   const flowLayer = calcFlowLayer(flowRaw);
-  const layer4Output = calcLayer4Output(layer1Ceiling, layer2Components, layer3Breadth);
+  const layer4Output = calcLayer4Output(layer1Ceiling, layer2Components, layer3Breadth, indices);
   const regime = buildRegime(
     indexLayer, 
     breadthLayer, 
