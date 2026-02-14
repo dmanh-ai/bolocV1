@@ -1518,11 +1518,11 @@ export async function runFullAnalysis(): Promise<AnalysisResult> {
     },
   };
 
-  // Step 7: Filter for display — GTGD >= 10 tỷ (liquid stocks)
-  const toStocks = allTOStocks.filter((s) => s.gtgd >= 10);
-  const rsStocks = allRSStocks.filter((s) => s.gtgd >= 10);
+  // Step 7: Use ALL analyzed stocks for display (no GTGD filter)
+  const toStocks = [...allTOStocks];
+  const rsStocks = [...allRSStocks];
 
-  // Step 8: Sort and categorize filtered stocks
+  // Step 8: Sort and categorize
   toStocks.sort((a, b) => b.rank - a.rank);
   rsStocks.sort((a, b) => b.score - a.score);
 

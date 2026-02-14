@@ -954,11 +954,7 @@ export function StockAnalysis() {
           <TabsContent value="to" className="space-y-4">
             {/* Header info */}
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
-              <div>
-                <span className="text-sm font-bold text-zinc-200">Tổ hợp TO chất lượng cao</span>
-                <span className="text-xs text-zinc-500 ml-2">| TK ≥ 10 tỷ</span>
-              </div>
-              <span className="text-xs text-zinc-400 font-mono">{data.totalStocks} mã / {data.totalUniverse} universe</span>
+              <span className="text-sm font-bold text-zinc-200">Tổ hợp TO — {data.totalStocks} mã phân tích</span>
             </div>
 
             {/* Summary Stats */}
@@ -994,11 +990,7 @@ export function StockAnalysis() {
           <TabsContent value="rs" className="space-y-4">
             {/* Header info */}
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
-              <div>
-                <span className="text-sm font-bold text-zinc-200">Tổ hợp RS chất lượng cao</span>
-                <span className="text-xs text-zinc-500 ml-2">| TK ≥ 10 tỷ</span>
-              </div>
-              <span className="text-xs text-zinc-400 font-mono">{data.rsStocks.length} mã / {data.totalUniverse} universe</span>
+              <span className="text-sm font-bold text-zinc-200">Tổ hợp RS — {data.rsStocks.length} mã phân tích</span>
             </div>
 
             {/* Summary Stats */}
