@@ -618,10 +618,14 @@ export async function computeRealBreadth(): Promise<RealBreadthData | null> {
     const stockList = await getStockList();
     
     // Filter to HOSE and HNX stocks only (exclude UPCOM for performance)
-    const activeStocks = stockList.filter(s => 
-      (s.exchange === "HOSE" || s.exchange === "HNX") && 
-      s.total_volume > 0
-    );
+    // Also prioritize stocks with higher trading volume
+    const activeStocks = stockList
+      .filter(s => 
+        (s.exchange === "HOSE" || s.exchange === "HNX") && 
+        s.total_volume > 0
+      )
+      .sort((a, b) => b.total_volume - a.total_volume)
+      .slice(0, 300); // Limit to top 300 most liquid stocks for performance
 
     // Define VN30 symbols (top 30 by market cap on HOSE)
     // In practice, this should be fetched from metadata, but we'll use a simplified approach
