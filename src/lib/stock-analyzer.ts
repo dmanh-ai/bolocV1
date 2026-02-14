@@ -734,6 +734,10 @@ async function calcIndexOverviews(): Promise<IndexOverview[]> {
     const avgVol = data.slice(-20).reduce((s, d) => s + (d.volume ?? 0), 0) / 20;
     const volX = avgVol > 0 ? vol / avgVol : 1;
     
+    // Calculate change percentage
+    const prevClose = prev.close;
+    const changePct = prevClose > 0 ? ((c - prevClose) / prevClose) * 100 : 0;
+    
     overviews.push({
       symbol,
       state,
@@ -749,6 +753,8 @@ async function calcIndexOverviews(): Promise<IndexOverview[]> {
       bqs: 50, // Base quality score (placeholder)
       rqs: 50, // Retest quality score (placeholder)
       volX,
+      close: c,
+      changePct,
     });
   }
   
@@ -1305,9 +1311,9 @@ function buildRegime(
  * Run full stock analysis on top N stocks by trading value (GTGD).
  * GTGD = Giá trị giao dịch (trading value) = price * volume, in billion VND.
  * 
- * @param topN Number of stocks with highest trading value to analyze (default: 500)
+ * @param topN Number of stocks with highest trading value to analyze (default: 9999)
  */
-export async function runFullAnalysis(topN = 500): Promise<AnalysisResult> {
+export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel, including new 4-layer index data
   const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices] = await Promise.all([
     getStockList(),
