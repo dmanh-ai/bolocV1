@@ -495,7 +495,7 @@ export async function getIndexHistory(
 export async function getLatestIndexData(): Promise<
   Record<string, IndexData>
 > {
-  const indices = ["VNINDEX", "VN30", "HNXINDEX", "UPCOMINDEX"];
+  const indices = ["VNINDEX", "VN30", "VNMID", "VNSML", "HNXINDEX", "UPCOMINDEX"];
   const result: Record<string, IndexData> = {};
 
   await Promise.all(

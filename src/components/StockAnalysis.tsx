@@ -867,7 +867,7 @@ function AnalysisLoading() {
 export function StockAnalysis() {
   const { data, isLoading, refetch, isFetching } = useQuery<AnalysisResult>({
     queryKey: ['stock-analysis-v5'],
-    queryFn: () => runFullAnalysis(200),
+    queryFn: () => runFullAnalysis(9999),
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
