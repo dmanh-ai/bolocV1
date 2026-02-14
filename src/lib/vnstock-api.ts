@@ -92,23 +92,99 @@ export interface StockListItem {
   avg_match_volume_2w: number;
 }
 
+/**
+ * Fetch all available symbols from metadata/symbols_by_industry.csv.
+ * This file contains the complete list of all stocks in the vnstock repository.
+ * Falls back to an empty array if the file cannot be fetched.
+ * 
+ * @returns Array of symbol strings (normalized to uppercase)
+ */
+async function fetchAllSymbols(): Promise<string[]> {
+  try {
+    const data = await fetchCSV("metadata/symbols_by_industry.csv");
+    const symbols = data
+      .map((row) => row.symbol)
+      .filter((s) => s && s.trim().length > 0)
+      .map((s) => s.toUpperCase()); // Normalize to uppercase for consistent lookups
+    return [...new Set(symbols)]; // Remove duplicates
+  } catch (error) {
+    console.error("Failed to fetch symbol list from metadata:", error);
+    return [];
+  }
+}
+
+/**
+ * Get the full list of stocks by merging all available symbols with trading stats.
+ * 
+ * This function:
+ * 1. Fetches all symbols from metadata/symbols_by_industry.csv (comprehensive list)
+ * 2. Fetches trading stats from trading/trading_stats.csv (prices, volumes, etc.)
+ * 3. Merges both datasets so all symbols are included
+ * 4. For symbols without trading stats, defaults to 0 or empty values
+ * 
+ * Falls back to trading stats only if symbol metadata cannot be fetched.
+ * 
+ * @returns Promise<StockListItem[]> - Complete list of stocks with trading data
+ */
 export async function getStockList(): Promise<StockListItem[]> {
-  const data = await fetchCSV("trading/trading_stats.csv");
-  return data.map((row) => ({
-    symbol: row.symbol,
-    exchange: row.exchange,
-    close_price: num(row.close_price) ?? 0,
-    price_change: num(row.price_change) ?? 0,
-    price_change_pct: num(row.price_change_pct) ?? 0,
-    total_volume: num(row.total_volume) ?? 0,
-    high: num(row.high) ?? 0,
-    low: num(row.low) ?? 0,
-    ref_price: num(row.ref_price) ?? 0,
-    ceiling: num(row.ceiling) ?? 0,
-    floor: num(row.floor) ?? 0,
-    foreign_volume: num(row.foreign_volume) ?? 0,
-    avg_match_volume_2w: num(row.avg_match_volume_2w) ?? 0,
-  }));
+  try {
+    // Fetch both symbol list and trading stats in parallel
+    const [allSymbols, tradingData] = await Promise.all([
+      fetchAllSymbols(),
+      fetchCSV("trading/trading_stats.csv").catch(() => []),
+    ]);
+
+    // Create a map of trading stats for quick lookup
+    const tradingMap = new Map<string, Record<string, string>>();
+    tradingData.forEach((row) => {
+      if (row.symbol) {
+        tradingMap.set(row.symbol.toUpperCase(), row);
+      }
+    });
+
+    // If we have symbols from metadata, use them as the base
+    if (allSymbols.length > 0) {
+      return allSymbols.map((symbol) => {
+        const trading = tradingMap.get(symbol); // Symbol already uppercase from fetchAllSymbols
+        return {
+          symbol: symbol,
+          exchange: trading?.exchange || "", // Empty string indicates no trading data available
+          close_price: num(trading?.close_price) ?? 0,
+          price_change: num(trading?.price_change) ?? 0,
+          price_change_pct: num(trading?.price_change_pct) ?? 0,
+          total_volume: num(trading?.total_volume) ?? 0,
+          high: num(trading?.high) ?? 0,
+          low: num(trading?.low) ?? 0,
+          ref_price: num(trading?.ref_price) ?? 0,
+          ceiling: num(trading?.ceiling) ?? 0,
+          floor: num(trading?.floor) ?? 0,
+          foreign_volume: num(trading?.foreign_volume) ?? 0,
+          avg_match_volume_2w: num(trading?.avg_match_volume_2w) ?? 0,
+        };
+      });
+    }
+
+    // Fallback: use only trading stats if symbol list unavailable
+    return tradingData.map((row) => ({
+      symbol: row.symbol,
+      exchange: row.exchange,
+      close_price: num(row.close_price) ?? 0,
+      price_change: num(row.price_change) ?? 0,
+      price_change_pct: num(row.price_change_pct) ?? 0,
+      total_volume: num(row.total_volume) ?? 0,
+      high: num(row.high) ?? 0,
+      low: num(row.low) ?? 0,
+      ref_price: num(row.ref_price) ?? 0,
+      ceiling: num(row.ceiling) ?? 0,
+      floor: num(row.floor) ?? 0,
+      foreign_volume: num(row.foreign_volume) ?? 0,
+      avg_match_volume_2w: num(row.avg_match_volume_2w) ?? 0,
+    }));
+  } catch (error) {
+    console.error("Failed to fetch stock list:", error);
+    // Return empty array as final fallback
+    return [];
+  }
 }
 
 export async function getStocksByExchange(
