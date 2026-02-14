@@ -1290,13 +1290,12 @@ function buildRegime(
 }
 
 /**
- * Run full stock analysis on universe with GTGD >= 10B VND.
+ * Run full stock analysis on top N stocks by trading value (GTGD).
  * GTGD = Giá trị giao dịch (trading value) = price * volume, in billion VND.
  * 
- * @param _topN Deprecated parameter (now ignored). Filter is based on GTGD >= 10B.
- * @deprecated topN parameter - use GTGD filter instead
+ * @param topN Number of stocks with highest trading value to analyze (default: 500)
  */
-export async function runFullAnalysis(_topN = 200): Promise<AnalysisResult> {
+export async function runFullAnalysis(topN = 500): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel, including new 4-layer index data
   const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices] = await Promise.all([
     getStockList(),
@@ -1350,8 +1349,11 @@ export async function runFullAnalysis(_topN = 200): Promise<AnalysisResult> {
       : (ratios?.ev ?? 0); // fallback to enterprise value
 
     const volume = trading?.total_volume ?? 0;
+    // close_price is in thousands VND (e.g. 25.5 = 25,500 VND), volume is in shares
+    // closePrice * volume = value in thousands VND
+    // To convert to billion VND (tỷ): divide by 1e6 (1000 × 1e6 = 1e9 = 1 billion)
     const gtgd = closePrice > 0 && volume > 0
-      ? (closePrice * volume) / 1e9
+      ? (closePrice * volume) / 1e6
       : 0;
 
     return {
@@ -1363,11 +1365,11 @@ export async function runFullAnalysis(_topN = 200): Promise<AnalysisResult> {
       gtgd,
     };
   })
-    .filter((s) => s.closePrice > 0 && s.gtgd >= 10) // gtgd is in billion VND (tỷ VND), filter >= 10
-    .sort((a, b) => b.gtgd - a.gtgd); // Sort by GTGD (liquidity) instead of market cap
+    .filter((s) => s.closePrice > 0 && s.gtgd > 0) // Filter stocks with valid trading data
+    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD (liquidity) instead of market cap
+    .slice(0, topN); // Top N by trading value
 
-  // Step 4: Analyze ALL stocks with GTGD >= 10B (not limited to topN)
-  // Note: topN parameter is deprecated and ignored in favor of GTGD filter
+  // Step 4: Analyze top N stocks by GTGD
   const toAnalyze = universe;
 
   // Step 5: Batch fetch price histories
