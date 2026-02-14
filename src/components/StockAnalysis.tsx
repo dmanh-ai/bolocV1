@@ -1200,9 +1200,10 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
 interface PortfolioHolding {
   id: string;
   symbol: string;
-  buyPrice: number;
+  buyPrice: number;   // stored in VND (user enters in thousands, e.g. 28.8 = 28,800)
   quantity: number;
   buyDate: string;
+  type: 'BUY' | 'SELL';
 }
 
 const PORTFOLIO_STORAGE_KEY = 'portfolio_holdings';
@@ -1225,10 +1226,11 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
   const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
   const [totalCapital, setTotalCapital] = useState<number>(0);
   const [capitalInput, setCapitalInput] = useState('');
+  const [newType, setNewType] = useState<'BUY' | 'SELL'>('BUY');
   const [newSymbol, setNewSymbol] = useState('');
-  const [newBuyPrice, setNewBuyPrice] = useState('');
+  const [newPrice, setNewPrice] = useState('');
   const [newQuantity, setNewQuantity] = useState('');
-  const [newBuyDate, setNewBuyDate] = useState('');
+  const [newDate, setNewDate] = useState('');
   const [recommendation, setRecommendation] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1268,66 +1270,94 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
     return map;
   }, [data.toStocks, data.rsStocks]);
 
-  // Add holding
+  // Add holding — price entered in thousands (28.8 = 28,800 VND)
   const addHolding = useCallback(() => {
     const sym = newSymbol.trim().toUpperCase();
-    const price = parseFloat(newBuyPrice.replace(/,/g, ''));
+    const priceRaw = parseFloat(newPrice.replace(/,/g, ''));
     const qty = parseInt(newQuantity.replace(/,/g, ''), 10);
-    if (!sym || isNaN(price) || price <= 0 || isNaN(qty) || qty <= 0) return;
+    if (!sym || isNaN(priceRaw) || priceRaw <= 0 || isNaN(qty) || qty <= 0) return;
 
     const h: PortfolioHolding = {
       id: Date.now().toString(),
+      type: newType,
       symbol: sym,
-      buyPrice: price,
+      buyPrice: Math.round(priceRaw * 1000), // 28.8 → 28,800 VND
       quantity: qty,
-      buyDate: newBuyDate || new Date().toISOString().slice(0, 10),
+      buyDate: newDate || new Date().toISOString().slice(0, 10),
     };
     saveHoldings([...holdings, h]);
     setNewSymbol('');
-    setNewBuyPrice('');
+    setNewPrice('');
     setNewQuantity('');
-    setNewBuyDate('');
-  }, [newSymbol, newBuyPrice, newQuantity, newBuyDate, holdings, saveHoldings]);
+    setNewDate('');
+  }, [newType, newSymbol, newPrice, newQuantity, newDate, holdings, saveHoldings]);
 
   const removeHolding = useCallback((id: string) => {
     saveHoldings(holdings.filter(h => h.id !== id));
   }, [holdings, saveHoldings]);
 
-  // Calculate portfolio stats
+  // Calculate portfolio stats — aggregate net position per symbol
   const portfolioStats = useMemo(() => {
+    // Group by symbol: net quantity & weighted avg cost
+    const posMap: Record<string, { totalQty: number; totalCost: number; sellQty: number; sellRevenue: number; entries: PortfolioHolding[] }> = {};
+    for (const h of holdings) {
+      if (!posMap[h.symbol]) posMap[h.symbol] = { totalQty: 0, totalCost: 0, sellQty: 0, sellRevenue: 0, entries: [] };
+      const pos = posMap[h.symbol];
+      pos.entries.push(h);
+      if (h.type === 'BUY') {
+        pos.totalCost += h.buyPrice * h.quantity;
+        pos.totalQty += h.quantity;
+      } else {
+        pos.sellRevenue += h.buyPrice * h.quantity;
+        pos.sellQty += h.quantity;
+      }
+    }
+
     let totalInvested = 0;
     let totalMarketValue = 0;
-    const rows = holdings.map(h => {
-      const current = priceMap[h.symbol];
-      const currentPrice = current?.price ?? h.buyPrice;
-      const invested = h.buyPrice * h.quantity;
-      const marketValue = currentPrice * h.quantity;
-      const pnl = marketValue - invested;
-      const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+    let totalRealizedPnl = 0;
+
+    const positions = Object.entries(posMap).map(([symbol, pos]) => {
+      const current = priceMap[symbol];
+      const currentPrice = current ? current.price * 1000 : (pos.totalQty > 0 ? Math.round(pos.totalCost / pos.totalQty) : 0);
+      const netQty = pos.totalQty - pos.sellQty;
+      const avgCost = pos.totalQty > 0 ? Math.round(pos.totalCost / pos.totalQty) : 0;
+      const invested = avgCost * netQty;
+      const marketValue = currentPrice * netQty;
+      // Realized P/L from sells
+      const realizedPnl = pos.sellQty > 0 ? pos.sellRevenue - avgCost * pos.sellQty : 0;
+      totalRealizedPnl += realizedPnl;
+      // Unrealized P/L on remaining position
+      const unrealizedPnl = netQty > 0 ? (currentPrice - avgCost) * netQty : 0;
+      const pnlPct = avgCost > 0 ? ((currentPrice - avgCost) / avgCost) * 100 : 0;
       totalInvested += invested;
       totalMarketValue += marketValue;
       return {
-        ...h,
+        symbol,
+        avgCost,
+        netQty,
         currentPrice,
         changePct: current?.changePct ?? 0,
         state: current?.state,
         qtier: current?.qtier,
         invested,
         marketValue,
-        pnl,
+        unrealizedPnl,
+        realizedPnl,
         pnlPct,
         found: !!current,
+        entries: pos.entries,
       };
-    });
-    const totalPnl = totalMarketValue - totalInvested;
-    const totalPnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
-    // Margin = phần mua vượt vốn (vay ký quỹ)
+    }).filter(p => p.netQty > 0 || p.realizedPnl !== 0);
+
+    const totalUnrealizedPnl = totalMarketValue - totalInvested;
+    const totalPnl = totalUnrealizedPnl + totalRealizedPnl;
+    const totalPnlPct = totalInvested > 0 ? (totalUnrealizedPnl / totalInvested) * 100 : 0;
     const margin = totalCapital > 0 && totalInvested > totalCapital ? totalInvested - totalCapital : 0;
     const marginPct = totalCapital > 0 ? (margin / totalCapital) * 100 : 0;
-    // Cash = vốn còn dư (chỉ khi chưa dùng hết)
     const cashRemaining = totalCapital > 0 && totalInvested < totalCapital ? totalCapital - totalInvested : 0;
     const cashPct = totalCapital > 0 ? (cashRemaining / totalCapital) * 100 : 0;
-    return { rows, totalInvested, totalMarketValue, totalPnl, totalPnlPct, cashRemaining, cashPct, margin, marginPct };
+    return { positions, totalInvested, totalMarketValue, totalUnrealizedPnl, totalRealizedPnl, totalPnl, totalPnlPct, cashRemaining, cashPct, margin, marginPct };
   }, [holdings, priceMap, totalCapital]);
 
   // AI analysis for portfolio
@@ -1351,17 +1381,20 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       summary += `Tổng vốn: ${totalCapital > 0 ? totalCapital.toLocaleString('vi-VN') : 'Chưa nhập'} VNĐ\n`;
       summary += `Tổng đầu tư: ${portfolioStats.totalInvested.toLocaleString('vi-VN')} VNĐ\n`;
       summary += `Giá trị thị trường: ${portfolioStats.totalMarketValue.toLocaleString('vi-VN')} VNĐ\n`;
-      summary += `Lãi/Lỗ: ${portfolioStats.totalPnl >= 0 ? '+' : ''}${portfolioStats.totalPnl.toLocaleString('vi-VN')} (${portfolioStats.totalPnlPct >= 0 ? '+' : ''}${portfolioStats.totalPnlPct.toFixed(2)}%)\n`;
+      summary += `Lãi/Lỗ chưa chốt: ${portfolioStats.totalUnrealizedPnl >= 0 ? '+' : ''}${portfolioStats.totalUnrealizedPnl.toLocaleString('vi-VN')} (${portfolioStats.totalPnlPct >= 0 ? '+' : ''}${portfolioStats.totalPnlPct.toFixed(2)}%)\n`;
+      if (portfolioStats.totalRealizedPnl !== 0) {
+        summary += `Lãi/Lỗ đã chốt: ${portfolioStats.totalRealizedPnl >= 0 ? '+' : ''}${portfolioStats.totalRealizedPnl.toLocaleString('vi-VN')}\n`;
+      }
       if (totalCapital > 0 && portfolioStats.margin > 0) {
         summary += `Margin (vay ký quỹ): ${portfolioStats.margin.toLocaleString('vi-VN')} (${portfolioStats.marginPct.toFixed(1)}% vốn)\n`;
       } else if (totalCapital > 0) {
         summary += `Cash còn: ${portfolioStats.cashRemaining.toLocaleString('vi-VN')} (${portfolioStats.cashPct.toFixed(1)}%)\n`;
       }
-      summary += `\n--- CHI TIẾT TỪNG MÃ ---\n`;
-      for (const r of portfolioStats.rows) {
-        summary += `${r.symbol}: Mua ${r.buyPrice.toLocaleString('vi-VN')} x ${r.quantity.toLocaleString('vi-VN')} cp (${r.buyDate}) | Giá hiện tại: ${r.currentPrice.toLocaleString('vi-VN')} | Hôm nay: ${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(2)}% | P/L: ${r.pnl >= 0 ? '+' : ''}${r.pnl.toLocaleString('vi-VN')} (${r.pnlPct >= 0 ? '+' : ''}${r.pnlPct.toFixed(1)}%)`;
-        if (r.state) summary += ` | State: ${r.state}`;
-        if (r.qtier) summary += ` | QTier: ${r.qtier}`;
+      summary += `\n--- VỊ THẾ HIỆN TẠI ---\n`;
+      for (const p of portfolioStats.positions.filter(p => p.netQty > 0)) {
+        summary += `${p.symbol}: Giá TB ${p.avgCost.toLocaleString('vi-VN')} x ${p.netQty.toLocaleString('vi-VN')} cp | Giá hiện tại: ${p.currentPrice.toLocaleString('vi-VN')} | Hôm nay: ${p.changePct >= 0 ? '+' : ''}${p.changePct.toFixed(2)}% | P/L: ${p.unrealizedPnl >= 0 ? '+' : ''}${p.unrealizedPnl.toLocaleString('vi-VN')} (${p.pnlPct >= 0 ? '+' : ''}${p.pnlPct.toFixed(1)}%)`;
+        if (p.state) summary += ` | State: ${p.state}`;
+        if (p.qtier) summary += ` | QTier: ${p.qtier}`;
         summary += `\n`;
       }
 
@@ -1459,10 +1492,25 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
         </div>
       </div>
 
-      {/* Add Holding Form */}
+      {/* Add Transaction Form */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
-        <p className="text-xs text-zinc-400 font-semibold">Thêm mã vào danh mục</p>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <p className="text-xs text-zinc-400 font-semibold">Thêm giao dịch</p>
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          {/* BUY / SELL toggle */}
+          <div className="flex rounded-md border border-zinc-700 overflow-hidden">
+            <button
+              onClick={() => setNewType('BUY')}
+              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'BUY' ? 'bg-green-600 text-white' : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'}`}
+            >
+              MUA
+            </button>
+            <button
+              onClick={() => setNewType('SELL')}
+              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'SELL' ? 'bg-red-600 text-white' : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'}`}
+            >
+              BÁN
+            </button>
+          </div>
           <input
             type="text"
             value={newSymbol}
@@ -1472,12 +1520,12 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
           />
           <input
             type="text"
-            value={newBuyPrice}
+            value={newPrice}
             onChange={(e) => {
               const raw = e.target.value.replace(/[^\d.]/g, '');
-              setNewBuyPrice(raw);
+              setNewPrice(raw);
             }}
-            placeholder="Giá vốn"
+            placeholder="Giá (VD: 28.8)"
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
           />
           <input
@@ -1492,18 +1540,18 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
           />
           <input
             type="date"
-            value={newBuyDate}
-            onChange={(e) => setNewBuyDate(e.target.value)}
+            value={newDate}
+            onChange={(e) => setNewDate(e.target.value)}
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-violet-500"
           />
           <Button
             size="sm"
             variant="outline"
-            className="gap-1 border-violet-700 text-violet-400 hover:bg-violet-900/30"
+            className={`gap-1 ${newType === 'BUY' ? 'border-green-700 text-green-400 hover:bg-green-900/30' : 'border-red-700 text-red-400 hover:bg-red-900/30'}`}
             onClick={addHolding}
           >
             <Plus className="w-3.5 h-3.5" />
-            Thêm
+            {newType === 'BUY' ? 'Mua' : 'Bán'}
           </Button>
         </div>
       </div>
@@ -1511,7 +1559,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       {/* Portfolio Summary */}
       {holdings.length > 0 && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
               <p className="text-xs text-zinc-500">Tổng đầu tư</p>
               <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalInvested)}</p>
@@ -1521,12 +1569,20 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalMarketValue)}</p>
             </div>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
-              <p className="text-xs text-zinc-500">Lãi/Lỗ</p>
-              <p className={`text-sm font-bold ${portfolioStats.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {portfolioStats.totalPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalPnl)}
+              <p className="text-xs text-zinc-500">Lãi/Lỗ chưa chốt</p>
+              <p className={`text-sm font-bold ${portfolioStats.totalUnrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {portfolioStats.totalUnrealizedPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalUnrealizedPnl)}
                 <span className="text-xs ml-1">({portfolioStats.totalPnlPct >= 0 ? '+' : ''}{portfolioStats.totalPnlPct.toFixed(2)}%)</span>
               </p>
             </div>
+            {portfolioStats.totalRealizedPnl !== 0 && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                <p className="text-xs text-zinc-500">Lãi/Lỗ đã chốt</p>
+                <p className={`text-sm font-bold ${portfolioStats.totalRealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {portfolioStats.totalRealizedPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalRealizedPnl)}
+                </p>
+              </div>
+            )}
             {totalCapital > 0 && portfolioStats.margin > 0 ? (
               <div className="rounded-lg border border-red-800/50 bg-red-900/10 p-3 text-center">
                 <p className="text-xs text-zinc-500">Margin (vay)</p>
@@ -1546,49 +1602,80 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
             ) : null}
           </div>
 
-          {/* Holdings Table */}
+          {/* Positions Table (aggregated) */}
           <div className="rounded-lg border border-zinc-800 overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-zinc-900 text-zinc-400 border-b border-zinc-800">
                   <th className="text-left p-2 font-medium">Mã</th>
-                  <th className="text-right p-2 font-medium">Giá vốn</th>
-                  <th className="text-right p-2 font-medium">SL</th>
-                  <th className="text-right p-2 font-medium">Ngày mua</th>
+                  <th className="text-right p-2 font-medium">Giá TB</th>
+                  <th className="text-right p-2 font-medium">SL còn</th>
                   <th className="text-right p-2 font-medium">Giá hiện tại</th>
                   <th className="text-right p-2 font-medium">Hôm nay</th>
                   <th className="text-right p-2 font-medium">Giá trị</th>
                   <th className="text-right p-2 font-medium">Lãi/Lỗ</th>
                   <th className="text-right p-2 font-medium">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolioStats.positions.filter(p => p.netQty > 0).map((p) => (
+                  <tr key={p.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
+                    <td className="p-2 font-bold text-zinc-200">
+                      {p.symbol}
+                      {p.state && <span className="ml-1 text-[10px] text-zinc-500">{p.state}</span>}
+                    </td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(p.avgCost)}</td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(p.netQty)}</td>
+                    <td className={`text-right p-2 font-medium ${p.found ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                      {fmtVND(p.currentPrice)}
+                      {!p.found && <span className="text-[10px] text-zinc-600 ml-1">?</span>}
+                    </td>
+                    <td className={`text-right p-2 ${p.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {p.changePct >= 0 ? '+' : ''}{p.changePct.toFixed(2)}%
+                    </td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(p.marketValue)}</td>
+                    <td className={`text-right p-2 font-medium ${p.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {p.unrealizedPnl >= 0 ? '+' : ''}{fmtVND(p.unrealizedPnl)}
+                    </td>
+                    <td className={`text-right p-2 font-medium ${p.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {p.pnlPct >= 0 ? '+' : ''}{p.pnlPct.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Transaction History */}
+          <div className="rounded-lg border border-zinc-800 overflow-x-auto">
+            <p className="text-xs text-zinc-400 font-semibold p-2 bg-zinc-900 border-b border-zinc-800">Lịch sử giao dịch</p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-zinc-900/50 text-zinc-500 border-b border-zinc-800">
+                  <th className="text-left p-2 font-medium">Loại</th>
+                  <th className="text-left p-2 font-medium">Mã</th>
+                  <th className="text-right p-2 font-medium">Giá</th>
+                  <th className="text-right p-2 font-medium">SL</th>
+                  <th className="text-right p-2 font-medium">Ngày</th>
+                  <th className="text-right p-2 font-medium">Giá trị</th>
                   <th className="p-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {portfolioStats.rows.map((r) => (
-                  <tr key={r.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
-                    <td className="p-2 font-bold text-zinc-200">
-                      {r.symbol}
-                      {r.state && <span className="ml-1 text-[10px] text-zinc-500">{r.state}</span>}
-                    </td>
-                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.buyPrice)}</td>
-                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.quantity)}</td>
-                    <td className="text-right p-2 text-zinc-500">{r.buyDate}</td>
-                    <td className={`text-right p-2 font-medium ${r.found ? 'text-zinc-200' : 'text-zinc-500'}`}>
-                      {fmtVND(r.currentPrice)}
-                      {!r.found && <span className="text-[10px] text-zinc-600 ml-1">?</span>}
-                    </td>
-                    <td className={`text-right p-2 ${r.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {r.changePct >= 0 ? '+' : ''}{r.changePct.toFixed(2)}%
-                    </td>
-                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.marketValue)}</td>
-                    <td className={`text-right p-2 font-medium ${r.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {r.pnl >= 0 ? '+' : ''}{fmtVND(r.pnl)}
-                    </td>
-                    <td className={`text-right p-2 font-medium ${r.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {r.pnlPct >= 0 ? '+' : ''}{r.pnlPct.toFixed(1)}%
-                    </td>
+                {holdings.map((h) => (
+                  <tr key={h.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
                     <td className="p-2">
-                      <button onClick={() => removeHolding(r.id)} className="text-zinc-600 hover:text-red-400">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${h.type === 'BUY' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
+                        {h.type === 'BUY' ? 'MUA' : 'BÁN'}
+                      </span>
+                    </td>
+                    <td className="p-2 font-bold text-zinc-200">{h.symbol}</td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(h.buyPrice)}</td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(h.quantity)}</td>
+                    <td className="text-right p-2 text-zinc-500">{h.buyDate}</td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(h.buyPrice * h.quantity)}</td>
+                    <td className="p-2">
+                      <button onClick={() => removeHolding(h.id)} className="text-zinc-600 hover:text-red-400">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>
