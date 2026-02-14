@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo, useCallback, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
 import {
   runFullAnalysis,
   TO_TIERS,
@@ -926,6 +926,14 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
   const [isLoading, setIsLoading] = useState(false);
   const [analyzedAt, setAnalyzedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+
+  // Load API key from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('anthropic_api_key');
+    if (saved) setApiKey(saved);
+  }, []);
 
   const generateSummary = useCallback(() => {
     const regime = data.regime;
@@ -992,9 +1000,9 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     setRecommendation('');
 
     try {
-      const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
       if (!apiKey) {
-        throw new Error('NEXT_PUBLIC_ANTHROPIC_API_KEY chưa được cấu hình trong .env.local');
+        setShowKeyInput(true);
+        throw new Error('Vui lòng nhập Anthropic API Key để sử dụng tính năng này.');
       }
 
       const summary = generateSummary();
@@ -1065,7 +1073,7 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     } finally {
       setIsLoading(false);
     }
-  }, [generateSummary]);
+  }, [generateSummary, apiKey]);
 
   return (
     <div className="space-y-4">
@@ -1098,6 +1106,49 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
           )}
         </Button>
       </div>
+
+      {/* API Key Input */}
+      {showKeyInput && (
+        <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-2">
+          <p className="text-xs text-amber-400">Nhập Anthropic API Key (lưu trong trình duyệt, không gửi đi đâu ngoài Anthropic API):</p>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-ant-api03-..."
+              className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
+              onClick={() => {
+                if (apiKey.trim()) {
+                  localStorage.setItem('anthropic_api_key', apiKey.trim());
+                  setShowKeyInput(false);
+                  setError(null);
+                }
+              }}
+            >
+              Lưu
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Saved key indicator + change button */}
+      {apiKey && !showKeyInput && (
+        <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <span>API Key: ****{apiKey.slice(-6)}</span>
+          <button
+            className="text-amber-500 hover:text-amber-400 underline"
+            onClick={() => setShowKeyInput(true)}
+          >
+            Đổi key
+          </button>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
