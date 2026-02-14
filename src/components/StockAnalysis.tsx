@@ -746,7 +746,7 @@ export function StockAnalysis() {
 
             {/* Distribution Summary */}
             <div className="text-xs text-zinc-400 space-y-1">
-              <div>QualityTier Distribution ({data.totalStocks} stocks): PRIME {data.counts.prime} ({((data.counts.prime/data.totalStocks)*100).toFixed(1)}%), VALID {data.counts.valid} ({((data.counts.valid/data.totalStocks)*100).toFixed(1)}%), WATCH {data.counts.watch} ({((data.counts.watch/data.totalStocks)*100).toFixed(1)}%), AVOID {data.counts.avoid} ({((data.counts.avoid/data.totalStocks)*100).toFixed(1)}%)</div>
+              <div>QualityTier Distribution ({data.totalStocks} stocks): {data.totalStocks > 0 ? `PRIME ${data.counts.prime} (${((data.counts.prime/data.totalStocks)*100).toFixed(1)}%), VALID ${data.counts.valid} (${((data.counts.valid/data.totalStocks)*100).toFixed(1)}%), WATCH ${data.counts.watch} (${((data.counts.watch/data.totalStocks)*100).toFixed(1)}%), AVOID ${data.counts.avoid} (${((data.counts.avoid/data.totalStocks)*100).toFixed(1)}%)` : 'No data'}</div>
             </div>
 
             {/* Tier Sections */}
@@ -777,7 +777,7 @@ export function StockAnalysis() {
 
             {/* RS Vector Distribution Summary */}
             <div className="text-xs text-zinc-400 space-y-1">
-              <div>RS Vector Distribution ({data.rsStocks.length} stocks): SYNC {data.counts.sync} ({((data.counts.sync/data.rsStocks.length)*100).toFixed(1)}%), D_LEAD {data.counts.dLead} ({((data.counts.dLead/data.rsStocks.length)*100).toFixed(1)}%), M_LEAD {data.counts.mLead} ({((data.counts.mLead/data.rsStocks.length)*100).toFixed(1)}%), NEUT {data.counts.neut} ({((data.counts.neut/data.rsStocks.length)*100).toFixed(1)}%), WEAK {data.counts.weak} ({((data.counts.weak/data.rsStocks.length)*100).toFixed(1)}%)</div>
+              <div>RS Vector Distribution ({data.rsStocks.length} stocks): {data.rsStocks.length > 0 ? `SYNC ${data.counts.sync} (${((data.counts.sync/data.rsStocks.length)*100).toFixed(1)}%), D_LEAD ${data.counts.dLead} (${((data.counts.dLead/data.rsStocks.length)*100).toFixed(1)}%), M_LEAD ${data.counts.mLead} (${((data.counts.mLead/data.rsStocks.length)*100).toFixed(1)}%), NEUT ${data.counts.neut} (${((data.counts.neut/data.rsStocks.length)*100).toFixed(1)}%), WEAK ${data.counts.weak} (${((data.counts.weak/data.rsStocks.length)*100).toFixed(1)}%)` : 'No data'}</div>
             </div>
 
             {/* Category Sections */}

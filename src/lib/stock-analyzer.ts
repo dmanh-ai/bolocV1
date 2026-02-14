@@ -420,6 +420,10 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
  * V5.3 scoring: Stricter thresholds to match reference distribution.
  * - Reference distribution: PRIME 4%, VALID 8%, WATCH 19%, AVOID 69%
  * - Stocks without ratio data default to AVOID (not VALID)
+ *   Rationale: In the reference system, most stocks (69%) are AVOID, suggesting
+ *   that quality data is essential. Missing ratios indicates lack of transparency
+ *   or tracking, which aligns with AVOID criteria. This is a conservative
+ *   approach that protects against investing in stocks with insufficient data.
  * - PRIME >= 8, VALID >= 5, WATCH >= 2, else AVOID
  * - More stringent ROE/growth requirements
  */
@@ -764,8 +768,10 @@ function calcLayer1Ceiling(indices: IndexOverview[]): Layer1Ceiling {
   }
   
   // Check if at ceiling (resistance)
-  const atCeiling = vnindex.stateNum === 7 || vnindex.mi < 35;
-  const weak = vnindex.miPhase === "LOW" || vnindex.mi < 45;
+  const MI_CEILING_THRESHOLD = 35; // Below this indicates ceiling hit
+  const MI_WEAK_THRESHOLD = 45; // Below this indicates weak momentum
+  const atCeiling = vnindex.stateNum === 7 || vnindex.mi < MI_CEILING_THRESHOLD;
+  const weak = vnindex.miPhase === "LOW" || vnindex.mi < MI_WEAK_THRESHOLD;
   const broken = vnindex.tpath === "WEAK";
   
   if (atCeiling) {
@@ -1285,9 +1291,14 @@ function buildRegime(
   };
 }
 
-// ==================== MAIN ANALYSIS ====================
-
-export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
+/**
+ * Run full stock analysis on universe with GTGD >= 10B VND.
+ * GTGD = Giá trị giao dịch (trading value) = price * volume, in billion VND.
+ * 
+ * @param _topN Deprecated parameter (now ignored). Filter is based on GTGD >= 10B.
+ * @deprecated topN parameter - use GTGD filter instead
+ */
+export async function runFullAnalysis(_topN = 200): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel, including new 4-layer index data
   const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices] = await Promise.all([
     getStockList(),
