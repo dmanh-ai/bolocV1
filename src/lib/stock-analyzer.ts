@@ -1349,8 +1349,8 @@ export async function runFullAnalysis(topN = 500): Promise<AnalysisResult> {
       : (ratios?.ev ?? 0); // fallback to enterprise value
 
     const volume = trading?.total_volume ?? 0;
-    // Stock CSV prices are in thousands VND → close * volume = value in 1000 VND
-    // To get tỷ VND: divide by 1e6 (1000 VND * 1e6 = 1e9 VND = 1 tỷ)
+    // close_price is in thousands VND, volume is in shares
+    // (closePrice * volume) gives thousands VND → divide by 1e6 to get billion VND (tỷ)
     const gtgd = closePrice > 0 && volume > 0
       ? (closePrice * volume) / 1e6
       : 0;
@@ -1364,7 +1364,7 @@ export async function runFullAnalysis(topN = 500): Promise<AnalysisResult> {
       gtgd,
     };
   })
-    .filter((s) => s.closePrice > 0 && s.gtgd > 0) // Filter stocks with valid trading data
+    .filter((s) => s.closePrice > 0) // Filter stocks with valid price data
     .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD (liquidity) instead of market cap
     .slice(0, topN); // Top N by trading value
 
