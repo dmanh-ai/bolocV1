@@ -16,11 +16,13 @@ import {
   getIndexHistory,
   getMarketBreadth,
   getForeignFlow,
+  computeRealBreadth,
   type StockOHLCV,
   type CompanyRatios,
   type IndexData,
   type MarketBreadth,
   type ForeignFlow,
+  type RealBreadthData,
 } from "./vnstock-api";
 
 // ==================== TYPES ====================
@@ -888,27 +890,46 @@ function calcLayer2Components(indices: IndexOverview[]): Layer2Components {
   };
 }
 
-function calcLayer3BreadthV2(indices: IndexOverview[]): Layer3Breadth {
+function calcLayer3BreadthV2(
+  indices: IndexOverview[],
+  realBreadth: RealBreadthData | null = null
+): Layer3Breadth {
   const details: string[] = [];
   let score = 0;
   
   // Get breadth data for each index
-  // For now, use simplified calculation based on index MI
   const vn30 = indices.find(i => i.symbol === "VN30");
   const vnmid = indices.find(i => i.symbol === "VNMID");
   const vnindex = indices.find(i => i.symbol === "VNINDEX");
   
-  // Simulate breadth % (in real impl, would fetch actual stock breadth)
-  // More conservative estimation that matches reference
-  // Reference: MI=66.6 → ~47% (previous formula incorrectly gave 54.9%)
-  const vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.75 - 3)) : 50;
-  const vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.65 - 2)) : 50;
-  const allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.70 - 2)) : 50;
-  
-  // Calculate slopes (simplified - using dMI as proxy)
-  const vn30Slope = vn30 ? vn30.dMI_D * 0.5 : 0;
-  const vnmidSlope = vnmid ? vnmid.dMI_D * 0.5 : 0;
-  const allSlope = vnindex ? vnindex.dMI_D * 0.5 : 0;
+  // Use real breadth data if available, otherwise fall back to simulated RSI-based approach
+  let vn30AboveEMA50: number;
+  let vnmidAboveEMA50: number;
+  let allStockAboveEMA50: number;
+  let vn30Slope: number;
+  let vnmidSlope: number;
+  let allSlope: number;
+
+  if (realBreadth) {
+    // Use real breadth data from actual stock analysis
+    vn30AboveEMA50 = realBreadth.vn30AboveEMA50;
+    vnmidAboveEMA50 = realBreadth.vnmidAboveEMA50;
+    allStockAboveEMA50 = realBreadth.allStockAboveEMA50;
+    vn30Slope = realBreadth.vn30Slope;
+    vnmidSlope = realBreadth.vnmidSlope;
+    allSlope = realBreadth.allSlope;
+  } else {
+    // Fallback: Simulate breadth % using RSI-based formula (legacy approach)
+    // More conservative estimation that matches reference
+    vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.75 - 3)) : 50;
+    vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.65 - 2)) : 50;
+    allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.70 - 2)) : 50;
+    
+    // Calculate slopes (simplified - using dMI as proxy)
+    vn30Slope = vn30 ? vn30.dMI_D * 0.5 : 0;
+    vnmidSlope = vnmid ? vnmid.dMI_D * 0.5 : 0;
+    allSlope = vnindex ? vnindex.dMI_D * 0.5 : 0;
+  }
   
   // Determine quadrants
   const vn30Quadrant = determineBreadthQuadrant(vn30AboveEMA50, vn30Slope);
@@ -1315,13 +1336,14 @@ function buildRegime(
  */
 export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
   // Step 1: Get all data sources in parallel, including new 4-layer index data
-  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices] = await Promise.all([
+  const [stockList, allRatios, vnindexRaw, breadthRaw, flowRaw, indices, realBreadth] = await Promise.all([
     getStockList(),
     getAllCompanyRatios(),
     getIndexHistory("VNINDEX").catch(() => [] as IndexData[]),
     getMarketBreadth().catch(() => [] as MarketBreadth[]),
     getForeignFlow().catch(() => [] as ForeignFlow[]),
     calcIndexOverviews(), // New 4-layer index data
+    computeRealBreadth().catch(() => null), // Real breadth calculation
   ]);
 
   // Cast vnindex data (IndexData has all the fields we need for StockOHLCV)
@@ -1334,7 +1356,7 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
   // Calculate new 4-layer model
   const layer1Ceiling = calcLayer1Ceiling(indices);
   const layer2Components = calcLayer2Components(indices);
-  const layer3Breadth = calcLayer3BreadthV2(indices);
+  const layer3Breadth = calcLayer3BreadthV2(indices, realBreadth);
 
   // Step 2: Build lookup maps
   const ratiosMap = new Map<string, CompanyRatios>();

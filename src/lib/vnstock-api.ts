@@ -586,3 +586,146 @@ export async function getIntradayData(
 ): Promise<Record<string, string>[]> {
   return fetchCSV(`intraday/${symbol.toUpperCase()}.csv`);
 }
+
+// --------------- Real Breadth Calculation ---------------
+
+export interface RealBreadthData {
+  vn30AboveEMA50: number;  // Percentage of VN30 stocks above SMA50
+  vnmidAboveEMA50: number; // Percentage of VNMID stocks above SMA50
+  allStockAboveEMA50: number; // Percentage of all stocks above SMA50
+  vn30Slope: number;       // 5-day slope of VN30 breadth
+  vnmidSlope: number;      // 5-day slope of VNMID breadth
+  allSlope: number;        // 5-day slope of all stocks breadth
+}
+
+/**
+ * Compute real market breadth by checking actual stocks above SMA50.
+ * Uses cached CSV data from vnstock repository.
+ * 
+ * This function:
+ * 1. Fetches the stock list to get all symbols
+ * 2. For each stock, reads the last few rows of price data to check if close > sma_50
+ * 3. Calculates percentage above SMA50 for VN30, VNMID, and all stocks
+ * 4. Calculates 5-day slope by comparing current percentage to 5 days ago
+ * 
+ * Performance: Leverages existing CSV caching (5 min TTL) and processes stocks in batches
+ * 
+ * @returns RealBreadthData object with breadth percentages and slopes
+ */
+export async function computeRealBreadth(): Promise<RealBreadthData | null> {
+  try {
+    // Get list of all stocks
+    const stockList = await getStockList();
+    
+    // Filter to HOSE and HNX stocks only (exclude UPCOM for performance)
+    const activeStocks = stockList.filter(s => 
+      (s.exchange === "HOSE" || s.exchange === "HNX") && 
+      s.total_volume > 0
+    );
+
+    // Define VN30 symbols (top 30 by market cap on HOSE)
+    // In practice, this should be fetched from metadata, but we'll use a simplified approach
+    const vn30Symbols = new Set([
+      "VCB", "VHM", "VNM", "VIC", "GAS", "MSN", "HPG", "MBB", "VPB", "TCB",
+      "ACB", "FPT", "BID", "CTG", "PLX", "VRE", "MWG", "VJC", "STB", "POW",
+      "SSI", "HDB", "PDR", "GVR", "NVL", "VCI", "TPB", "SAB", "PNJ", "KDH"
+    ]);
+
+    // VNMID: mid-cap stocks (roughly 30-100 by market cap)
+    const vnmidSymbols = new Set([
+      "DGC", "REE", "PVD", "DHG", "DPM", "VGC", "PC1", "NT2", "HT1", "SBT",
+      "DBC", "VCG", "BCM", "TCH", "GMD", "DIG", "HSG", "HCM", "BCG", "PVT",
+      "DCM", "VIB", "NLG", "QCG", "IDC", "BWE", "LPB", "VHC", "MSH", "VCS"
+    ]);
+
+    // Batch process stocks to get breadth data
+    const batchSize = 30; // Process 30 stocks at a time
+    const results: Array<{
+      symbol: string;
+      isVN30: boolean;
+      isVNMID: boolean;
+      todayAbove: boolean;
+      fiveDaysAgoAbove: boolean;
+    }> = [];
+
+    for (let i = 0; i < activeStocks.length; i += batchSize) {
+      const batch = activeStocks.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async (stock) => {
+          try {
+            const priceData = await getPriceHistory(stock.symbol);
+            if (priceData.length < 10) return null;
+
+            const latest = priceData[priceData.length - 1];
+            const fiveDaysAgo = priceData[priceData.length - 6]; // 5 days ago
+
+            // Check if close > sma_50 (using SMA50 as proxy for EMA50)
+            const todayAbove = latest.sma_50 !== undefined && 
+                              latest.close > latest.sma_50;
+            const fiveDaysAgoAbove = fiveDaysAgo?.sma_50 !== undefined && 
+                                    fiveDaysAgo.close > fiveDaysAgo.sma_50;
+
+            return {
+              symbol: stock.symbol,
+              isVN30: vn30Symbols.has(stock.symbol),
+              isVNMID: vnmidSymbols.has(stock.symbol),
+              todayAbove,
+              fiveDaysAgoAbove,
+            };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      // Add non-null results
+      batchResults.forEach((r) => r && results.push(r));
+    }
+
+    // Calculate breadth percentages
+    const vn30Stocks = results.filter(r => r.isVN30);
+    const vnmidStocks = results.filter(r => r.isVNMID);
+    const allStocks = results;
+
+    const vn30AboveEMA50 = vn30Stocks.length > 0 
+      ? (vn30Stocks.filter(r => r.todayAbove).length / vn30Stocks.length) * 100 
+      : 50;
+    
+    const vnmidAboveEMA50 = vnmidStocks.length > 0
+      ? (vnmidStocks.filter(r => r.todayAbove).length / vnmidStocks.length) * 100
+      : 50;
+    
+    const allStockAboveEMA50 = allStocks.length > 0
+      ? (allStocks.filter(r => r.todayAbove).length / allStocks.length) * 100
+      : 50;
+
+    // Calculate 5-day slopes (change in percentage)
+    const vn30AboveEMA50_5d = vn30Stocks.length > 0
+      ? (vn30Stocks.filter(r => r.fiveDaysAgoAbove).length / vn30Stocks.length) * 100
+      : 50;
+    
+    const vnmidAboveEMA50_5d = vnmidStocks.length > 0
+      ? (vnmidStocks.filter(r => r.fiveDaysAgoAbove).length / vnmidStocks.length) * 100
+      : 50;
+    
+    const allAboveEMA50_5d = allStocks.length > 0
+      ? (allStocks.filter(r => r.fiveDaysAgoAbove).length / allStocks.length) * 100
+      : 50;
+
+    const vn30Slope = vn30AboveEMA50 - vn30AboveEMA50_5d;
+    const vnmidSlope = vnmidAboveEMA50 - vnmidAboveEMA50_5d;
+    const allSlope = allStockAboveEMA50 - allAboveEMA50_5d;
+
+    return {
+      vn30AboveEMA50,
+      vnmidAboveEMA50,
+      allStockAboveEMA50,
+      vn30Slope,
+      vnmidSlope,
+      allSlope,
+    };
+  } catch (error) {
+    console.error("Failed to compute real breadth:", error);
+    return null;
+  }
+}
