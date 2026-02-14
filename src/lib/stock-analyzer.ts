@@ -1430,14 +1430,16 @@ export async function runFullAnalysis(): Promise<AnalysisResult> {
   const allTOStocks: TOStock[] = [];
   const allRSStocks: RSStock[] = [];
 
-  const batchSize = 50;
+  const batchSize = 25;
   for (let i = 0; i < toAnalyze.length; i += batchSize) {
     const batch = toAnalyze.slice(i, i + batchSize);
+    // Small delay between batches to avoid GitHub rate limiting
+    if (i > 0) await new Promise((r) => setTimeout(r, 100));
     const results = await Promise.all(
       batch.map(async (stock) => {
         try {
           const priceData = await getPriceHistory(stock.symbol);
-          if (priceData.length < 10) return null;
+          if (priceData.length < 5) return null;
 
           const ratios = ratiosMap.get(stock.symbol);
 

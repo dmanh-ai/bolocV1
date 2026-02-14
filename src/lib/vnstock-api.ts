@@ -45,16 +45,31 @@ async function fetchCSV(path: string): Promise<Record<string, string>[]> {
     return cached.data;
   }
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch ${path}: ${res.status}`);
+  // Retry up to 3 times with exponential backoff
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 404) {
+        throw new Error(`Not found: ${path}`);
+      }
+      if (!res.ok) {
+        throw new Error(`Failed to fetch ${path}: ${res.status}`);
+      }
+      const text = await res.text();
+      const data = parseCSV(text);
+      cache.set(url, { data, ts: Date.now() });
+      return data;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Don't retry 404s
+      if (lastError.message.includes("Not found")) throw lastError;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
   }
-
-  const text = await res.text();
-  const data = parseCSV(text);
-
-  cache.set(url, { data, ts: Date.now() });
-  return data;
+  throw lastError ?? new Error(`Failed to fetch ${path}`);
 }
 
 // Try latest, then today, then yesterday
