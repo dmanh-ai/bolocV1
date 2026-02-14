@@ -1411,8 +1411,9 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
     // Instead, all symbols are retained and sorted. Stocks with price history CSVs will be
     // successfully analyzed in batch processing; those without will be naturally excluded
     // when getPriceHistory fails or returns insufficient data (< 10 rows).
-    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD (liquidity), 0 values go to end
-    .slice(0, topN); // Top N by trading value (includes stocks with gtgd=0)
+    // Note: gtgd values are non-negative by construction (see lines 1395-1399)
+    .sort((a, b) => b.gtgd - a.gtgd) // Sort by GTGD descending (0 values sort to end)
+    .slice(0, topN); // Top N by trading value; topN defaults to 9999 (effectively all stocks)
 
   // Step 4: Analyze top N stocks by GTGD
   const toAnalyze = universe;
