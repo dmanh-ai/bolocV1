@@ -417,8 +417,8 @@ function RegimeScoreBar({ score, label }: { score: number; label?: string }) {
 
 // ==================== MARKET REGIME PANEL ====================
 
-// Badge color mapping
-const BADGE_COLORS: Record<string, string> = {
+// Badge color mapping for regime layers
+const REGIME_BADGE_COLORS: Record<string, string> = {
   LIMITED: 'bg-green-500 text-white',
   CHECK: 'bg-green-500 text-white',
   ALL_WEAK: 'bg-red-500 text-white border-2 border-red-500',
@@ -428,6 +428,16 @@ const BADGE_COLORS: Record<string, string> = {
   CLEAR: 'bg-green-500 text-white',
   ROTATING: 'bg-amber-500 text-white',
 };
+
+// Score multipliers for regime calculation
+const POSITIVE_SCORE_MULTIPLIER = 1.00;
+const NEGATIVE_SCORE_MULTIPLIER = 0.50;
+
+// Minimum threshold for showing labels in distribution charts (5%)
+const MIN_CHART_LABEL_THRESHOLD = 0.05;
+
+// Helper function to convert boolean to Yes/No
+const boolToYesNo = (value: boolean): string => value ? 'Yes' : 'No';
 
 // Action guide text mapping
 const ACTION_GUIDES: Record<RegimeState, { title: string; bullets: string[] }> = {
@@ -475,14 +485,19 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
   const actionGuide = ACTION_GUIDES[regime.regime] || ACTION_GUIDES.NEUTRAL;
   
   // Calculate RS Vector distribution
+  // Note: WEAK is approximated as NEUT stocks that are not active
   const rsVectorCounts = {
     SYNC: rsStocks.filter(s => s.vector === 'SYNC').length,
     D_LEAD: rsStocks.filter(s => s.vector === 'D_LEAD').length,
     M_LEAD: rsStocks.filter(s => s.vector === 'M_LEAD').length,
-    WEAK: rsStocks.filter(s => s.vector === 'NEUT' && !s.isActive).length, // WEAK approximation
+    WEAK: rsStocks.filter(s => s.vector === 'NEUT' && !s.isActive).length,
     NEUT: rsStocks.filter(s => s.vector === 'NEUT').length,
   };
   const rsTotal = rsStocks.length;
+
+  // Determine regime text color
+  const regimeTextColor = REGIME_TEXT[regime.regime] || 'text-zinc-400';
+  const scoreMultiplier = regime.score >= 0 ? POSITIVE_SCORE_MULTIPLIER : NEGATIVE_SCORE_MULTIPLIER;
 
   return (
     <div className="space-y-4">
@@ -490,11 +505,11 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
       <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
         <div className="flex items-center justify-between">
           <div>
-            <span className="text-3xl font-black text-red-500">{regime.regime}</span>
+            <span className={`text-3xl font-black ${regimeTextColor}`}>{regime.regime}</span>
           </div>
           <div className="text-right">
             <div className="text-lg font-bold text-zinc-100">Stop: {regime.allocation}</div>
-            <div className="text-sm text-zinc-400">{regime.regime} × {regime.score >= 0 ? '1.00' : '0.50'} | {regime.allocation}</div>
+            <div className="text-sm text-zinc-400">{regime.regime} × {scoreMultiplier.toFixed(2)} | {regime.allocation}</div>
           </div>
         </div>
       </div>
@@ -523,16 +538,16 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <span className={`px-2 py-1 rounded text-xs font-bold ${BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
             {regime.layer4Output.badge}
           </span>
           <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500 text-white">
             Code: {regime.score}
           </span>
           <span className="px-2 py-1 rounded text-xs font-bold bg-red-500 text-white">
-            ×{regime.score >= 0 ? '1.00' : '0.50'}
+            ×{scoreMultiplier.toFixed(2)}
           </span>
-          <span className={`px-2 py-1 rounded text-xs font-bold ${BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
             {regime.layer3Breadth.badge}
           </span>
         </div>
@@ -556,7 +571,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 1</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${BADGE_COLORS[regime.layer1Ceiling.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer1Ceiling.badge] || 'bg-zinc-700 text-zinc-300'}`}>
                 {regime.layer1Ceiling.badge}
               </span>
             </div>
@@ -565,11 +580,11 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
             <div className="space-y-1 text-xs">
               <div className="flex items-center gap-2">
                 <span className="text-zinc-400">Broken:</span>
-                <span className="text-amber-500">⚠ {regime.layer1Ceiling.broken ? 'Yes' : 'No'}</span>
+                <span className="text-amber-500">⚠ {boolToYesNo(regime.layer1Ceiling.broken)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-zinc-400">Weak:</span>
-                <span className="text-amber-500">⚠ {regime.layer1Ceiling.weak ? 'Yes' : 'No'}</span>
+                <span className="text-amber-500">⚠ {boolToYesNo(regime.layer1Ceiling.weak)}</span>
               </div>
             </div>
           </div>
@@ -578,7 +593,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 2</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${BADGE_COLORS[regime.layer2Components.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer2Components.badge] || 'bg-zinc-700 text-zinc-300'}`}>
                 {regime.layer2Components.badge}
               </span>
             </div>
@@ -595,7 +610,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
           <div className={`rounded-lg border p-4 ${regime.layer3Breadth.badge === 'ALL_WEAK' ? 'border-red-500 bg-zinc-950' : 'border-zinc-800 bg-zinc-950'}`}>
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 3</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
                 {regime.layer3Breadth.badge}
               </span>
             </div>
@@ -613,7 +628,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 4</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
                 {regime.layer4Output.badge}
               </span>
             </div>
@@ -702,6 +717,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                   </div>
                 </div>
                 <div className="space-y-1 text-xs text-zinc-400">
+                  {/* Note: EMA10 data not available, showing EMA50 for both as placeholder */}
                   <div>Trên EMA50: {aboveEMA50.toFixed(1)}% (EMA10: {aboveEMA50.toFixed(1)}%)</div>
                   {!item.isAll && (
                     <>
@@ -730,7 +746,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-green-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(rsVectorCounts.SYNC / rsTotal) * 100}%` }}
                   >
-                    {rsVectorCounts.SYNC > rsTotal * 0.05 && `SYNC: ${rsVectorCounts.SYNC}`}
+                    {rsVectorCounts.SYNC > rsTotal * MIN_CHART_LABEL_THRESHOLD && `SYNC: ${rsVectorCounts.SYNC}`}
                   </div>
                 )}
                 {rsVectorCounts.D_LEAD > 0 && (
@@ -738,7 +754,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(rsVectorCounts.D_LEAD / rsTotal) * 100}%` }}
                   >
-                    {rsVectorCounts.D_LEAD > rsTotal * 0.05 && `D_LEAD: ${rsVectorCounts.D_LEAD}`}
+                    {rsVectorCounts.D_LEAD > rsTotal * MIN_CHART_LABEL_THRESHOLD && `D_LEAD: ${rsVectorCounts.D_LEAD}`}
                   </div>
                 )}
                 {rsVectorCounts.M_LEAD > 0 && (
@@ -746,7 +762,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-cyan-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(rsVectorCounts.M_LEAD / rsTotal) * 100}%` }}
                   >
-                    {rsVectorCounts.M_LEAD > rsTotal * 0.05 && `M_LEAD: ${rsVectorCounts.M_LEAD}`}
+                    {rsVectorCounts.M_LEAD > rsTotal * MIN_CHART_LABEL_THRESHOLD && `M_LEAD: ${rsVectorCounts.M_LEAD}`}
                   </div>
                 )}
                 {rsVectorCounts.WEAK > 0 && (
@@ -754,7 +770,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-red-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(rsVectorCounts.WEAK / rsTotal) * 100}%` }}
                   >
-                    {rsVectorCounts.WEAK > rsTotal * 0.05 && `WEAK: ${rsVectorCounts.WEAK}`}
+                    {rsVectorCounts.WEAK > rsTotal * MIN_CHART_LABEL_THRESHOLD && `WEAK: ${rsVectorCounts.WEAK}`}
                   </div>
                 )}
                 {rsVectorCounts.NEUT > 0 && (
@@ -762,7 +778,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-zinc-600 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(rsVectorCounts.NEUT / rsTotal) * 100}%` }}
                   >
-                    {rsVectorCounts.NEUT > rsTotal * 0.05 && `NEUT: ${rsVectorCounts.NEUT}`}
+                    {rsVectorCounts.NEUT > rsTotal * MIN_CHART_LABEL_THRESHOLD && `NEUT: ${rsVectorCounts.NEUT}`}
                   </div>
                 )}
               </div>
@@ -786,7 +802,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-green-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(counts.prime / totalStocks) * 100}%` }}
                   >
-                    {counts.prime > totalStocks * 0.05 && `PRIME: ${counts.prime}`}
+                    {counts.prime > totalStocks * MIN_CHART_LABEL_THRESHOLD && `PRIME: ${counts.prime}`}
                   </div>
                 )}
                 {counts.valid > 0 && (
@@ -794,7 +810,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(counts.valid / totalStocks) * 100}%` }}
                   >
-                    {counts.valid > totalStocks * 0.05 && `VALID: ${counts.valid}`}
+                    {counts.valid > totalStocks * MIN_CHART_LABEL_THRESHOLD && `VALID: ${counts.valid}`}
                   </div>
                 )}
                 {counts.watch > 0 && (
@@ -802,7 +818,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-amber-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(counts.watch / totalStocks) * 100}%` }}
                   >
-                    {counts.watch > totalStocks * 0.05 && `WATCH: ${counts.watch}`}
+                    {counts.watch > totalStocks * MIN_CHART_LABEL_THRESHOLD && `WATCH: ${counts.watch}`}
                   </div>
                 )}
                 {counts.avoid > 0 && (
@@ -810,7 +826,7 @@ function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: {
                     className="bg-red-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
                     style={{ width: `${(counts.avoid / totalStocks) * 100}%` }}
                   >
-                    {counts.avoid > totalStocks * 0.05 && `AVOID: ${counts.avoid}`}
+                    {counts.avoid > totalStocks * MIN_CHART_LABEL_THRESHOLD && `AVOID: ${counts.avoid}`}
                   </div>
                 )}
               </div>
