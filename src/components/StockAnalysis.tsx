@@ -1321,9 +1321,13 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
     });
     const totalPnl = totalMarketValue - totalInvested;
     const totalPnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
-    const cashRemaining = totalCapital > 0 ? totalCapital - totalInvested : 0;
+    // Margin = phần mua vượt vốn (vay ký quỹ)
+    const margin = totalCapital > 0 && totalInvested > totalCapital ? totalInvested - totalCapital : 0;
+    const marginPct = totalCapital > 0 ? (margin / totalCapital) * 100 : 0;
+    // Cash = vốn còn dư (chỉ khi chưa dùng hết)
+    const cashRemaining = totalCapital > 0 && totalInvested < totalCapital ? totalCapital - totalInvested : 0;
     const cashPct = totalCapital > 0 ? (cashRemaining / totalCapital) * 100 : 0;
-    return { rows, totalInvested, totalMarketValue, totalPnl, totalPnlPct, cashRemaining, cashPct };
+    return { rows, totalInvested, totalMarketValue, totalPnl, totalPnlPct, cashRemaining, cashPct, margin, marginPct };
   }, [holdings, priceMap, totalCapital]);
 
   // AI analysis for portfolio
@@ -1348,7 +1352,9 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       summary += `Tổng đầu tư: ${portfolioStats.totalInvested.toLocaleString('vi-VN')} VNĐ\n`;
       summary += `Giá trị thị trường: ${portfolioStats.totalMarketValue.toLocaleString('vi-VN')} VNĐ\n`;
       summary += `Lãi/Lỗ: ${portfolioStats.totalPnl >= 0 ? '+' : ''}${portfolioStats.totalPnl.toLocaleString('vi-VN')} (${portfolioStats.totalPnlPct >= 0 ? '+' : ''}${portfolioStats.totalPnlPct.toFixed(2)}%)\n`;
-      if (totalCapital > 0) {
+      if (totalCapital > 0 && portfolioStats.margin > 0) {
+        summary += `Margin (vay ký quỹ): ${portfolioStats.margin.toLocaleString('vi-VN')} (${portfolioStats.marginPct.toFixed(1)}% vốn)\n`;
+      } else if (totalCapital > 0) {
         summary += `Cash còn: ${portfolioStats.cashRemaining.toLocaleString('vi-VN')} (${portfolioStats.cashPct.toFixed(1)}%)\n`;
       }
       summary += `\n--- CHI TIẾT TỪNG MÃ ---\n`;
@@ -1521,7 +1527,15 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
                 <span className="text-xs ml-1">({portfolioStats.totalPnlPct >= 0 ? '+' : ''}{portfolioStats.totalPnlPct.toFixed(2)}%)</span>
               </p>
             </div>
-            {totalCapital > 0 && (
+            {totalCapital > 0 && portfolioStats.margin > 0 ? (
+              <div className="rounded-lg border border-red-800/50 bg-red-900/10 p-3 text-center">
+                <p className="text-xs text-zinc-500">Margin (vay)</p>
+                <p className="text-sm font-bold text-red-400">
+                  {fmtVND(portfolioStats.margin)}
+                  <span className="text-xs ml-1">({portfolioStats.marginPct.toFixed(1)}%)</span>
+                </p>
+              </div>
+            ) : totalCapital > 0 ? (
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
                 <p className="text-xs text-zinc-500">Cash còn lại</p>
                 <p className="text-sm font-bold text-amber-400">
@@ -1529,7 +1543,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
                   <span className="text-xs ml-1">({portfolioStats.cashPct.toFixed(1)}%)</span>
                 </p>
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Holdings Table */}
