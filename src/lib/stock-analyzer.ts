@@ -1430,14 +1430,16 @@ export async function runFullAnalysis(): Promise<AnalysisResult> {
   const allTOStocks: TOStock[] = [];
   const allRSStocks: RSStock[] = [];
 
-  const batchSize = 50;
+  const batchSize = 25;
   for (let i = 0; i < toAnalyze.length; i += batchSize) {
     const batch = toAnalyze.slice(i, i + batchSize);
+    // Small delay between batches to avoid GitHub rate limiting
+    if (i > 0) await new Promise((r) => setTimeout(r, 100));
     const results = await Promise.all(
       batch.map(async (stock) => {
         try {
           const priceData = await getPriceHistory(stock.symbol);
-          if (priceData.length < 10) return null;
+          if (priceData.length < 5) return null;
 
           const ratios = ratiosMap.get(stock.symbol);
 
@@ -1518,11 +1520,11 @@ export async function runFullAnalysis(): Promise<AnalysisResult> {
     },
   };
 
-  // Step 7: Filter for display — GTGD >= 10 tỷ (liquid stocks)
-  const toStocks = allTOStocks.filter((s) => s.gtgd >= 10);
-  const rsStocks = allRSStocks.filter((s) => s.gtgd >= 10);
+  // Step 7: Use ALL analyzed stocks for display (no GTGD filter)
+  const toStocks = [...allTOStocks];
+  const rsStocks = [...allRSStocks];
 
-  // Step 8: Sort and categorize filtered stocks
+  // Step 8: Sort and categorize
   toStocks.sort((a, b) => b.rank - a.rank);
   rsStocks.sort((a, b) => b.score - a.score);
 
