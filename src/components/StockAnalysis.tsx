@@ -17,6 +17,9 @@ import {
   Minus,
   XCircle,
   Sparkles,
+  Briefcase,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
@@ -1192,6 +1195,482 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
   );
 }
 
+// ==================== PORTFOLIO TAB ====================
+
+interface PortfolioHolding {
+  id: string;
+  symbol: string;
+  buyPrice: number;
+  quantity: number;
+  buyDate: string;
+}
+
+const PORTFOLIO_STORAGE_KEY = 'portfolio_holdings';
+const PORTFOLIO_CAPITAL_KEY = 'portfolio_capital';
+
+const PORTFOLIO_AI_PROMPT = `Bạn là chuyên gia tư vấn quản lý danh mục đầu tư chứng khoán Việt Nam. Nhiệm vụ: phân tích danh mục hiện tại của nhà đầu tư và đưa ra khuyến nghị cụ thể.
+
+Yêu cầu output (BẮT BUỘC theo thứ tự):
+1. **ĐÁNH GIÁ DANH MỤC** — Tổng quan hiệu suất, mức độ tập trung/phân tán, rủi ro
+2. **PHÂN TÍCH TỪNG MÃ** — Mỗi mã: tình trạng kỹ thuật, nên giữ/bán/mua thêm
+3. **MÃ CẦN CẮT LỖ** — Nếu có mã lỗ nặng hoặc xu hướng xấu, khuyến nghị cắt
+4. **MÃ NÊN CHỐT LỜI** — Nếu có mã lãi cao hoặc vùng kháng cự
+5. **TÁI CÂN BẰNG** — Đề xuất tỷ trọng hợp lý, mã nên tăng/giảm vị thế
+6. **HÀNH ĐỘNG TIẾP THEO** — 2-3 bước cụ thể nên làm ngay
+
+Phong cách: ngắn gọn, bullet points, tập trung vào HÀNH ĐỘNG. Viết bằng tiếng Việt.
+Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không phải khuyến nghị đầu tư chính thức."`;
+
+function PortfolioTab({ data }: { data: AnalysisResult }) {
+  const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
+  const [totalCapital, setTotalCapital] = useState<number>(0);
+  const [capitalInput, setCapitalInput] = useState('');
+  const [newSymbol, setNewSymbol] = useState('');
+  const [newBuyPrice, setNewBuyPrice] = useState('');
+  const [newQuantity, setNewQuantity] = useState('');
+  const [newBuyDate, setNewBuyDate] = useState('');
+  const [recommendation, setRecommendation] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(PORTFOLIO_STORAGE_KEY);
+    if (saved) {
+      try { setHoldings(JSON.parse(saved)); } catch { /* ignore */ }
+    }
+    const cap = localStorage.getItem(PORTFOLIO_CAPITAL_KEY);
+    if (cap) {
+      setTotalCapital(Number(cap));
+      setCapitalInput(Number(cap).toLocaleString('vi-VN'));
+    }
+    const key = localStorage.getItem('anthropic_api_key');
+    if (key) setApiKey(key);
+  }, []);
+
+  // Save holdings to localStorage
+  const saveHoldings = useCallback((h: PortfolioHolding[]) => {
+    setHoldings(h);
+    localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(h));
+  }, []);
+
+  // Build price lookup from data
+  const priceMap = useMemo(() => {
+    const map: Record<string, { price: number; changePct: number; state?: State; qtier?: QTier }> = {};
+    for (const s of data.toStocks) {
+      map[s.symbol] = { price: s.price, changePct: s.changePct, state: s.state, qtier: s.qtier };
+    }
+    for (const s of data.rsStocks) {
+      if (!map[s.symbol]) map[s.symbol] = { price: s.price, changePct: s.changePct };
+    }
+    return map;
+  }, [data.toStocks, data.rsStocks]);
+
+  // Add holding
+  const addHolding = useCallback(() => {
+    const sym = newSymbol.trim().toUpperCase();
+    const price = parseFloat(newBuyPrice.replace(/,/g, ''));
+    const qty = parseInt(newQuantity.replace(/,/g, ''), 10);
+    if (!sym || isNaN(price) || price <= 0 || isNaN(qty) || qty <= 0) return;
+
+    const h: PortfolioHolding = {
+      id: Date.now().toString(),
+      symbol: sym,
+      buyPrice: price,
+      quantity: qty,
+      buyDate: newBuyDate || new Date().toISOString().slice(0, 10),
+    };
+    saveHoldings([...holdings, h]);
+    setNewSymbol('');
+    setNewBuyPrice('');
+    setNewQuantity('');
+    setNewBuyDate('');
+  }, [newSymbol, newBuyPrice, newQuantity, newBuyDate, holdings, saveHoldings]);
+
+  const removeHolding = useCallback((id: string) => {
+    saveHoldings(holdings.filter(h => h.id !== id));
+  }, [holdings, saveHoldings]);
+
+  // Calculate portfolio stats
+  const portfolioStats = useMemo(() => {
+    let totalInvested = 0;
+    let totalMarketValue = 0;
+    const rows = holdings.map(h => {
+      const current = priceMap[h.symbol];
+      const currentPrice = current?.price ?? h.buyPrice;
+      const invested = h.buyPrice * h.quantity;
+      const marketValue = currentPrice * h.quantity;
+      const pnl = marketValue - invested;
+      const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+      totalInvested += invested;
+      totalMarketValue += marketValue;
+      return {
+        ...h,
+        currentPrice,
+        changePct: current?.changePct ?? 0,
+        state: current?.state,
+        qtier: current?.qtier,
+        invested,
+        marketValue,
+        pnl,
+        pnlPct,
+        found: !!current,
+      };
+    });
+    const totalPnl = totalMarketValue - totalInvested;
+    const totalPnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
+    const cashRemaining = totalCapital > 0 ? totalCapital - totalInvested : 0;
+    const cashPct = totalCapital > 0 ? (cashRemaining / totalCapital) * 100 : 0;
+    return { rows, totalInvested, totalMarketValue, totalPnl, totalPnlPct, cashRemaining, cashPct };
+  }, [holdings, priceMap, totalCapital]);
+
+  // AI analysis for portfolio
+  const analyzePortfolio = useCallback(async () => {
+    if (holdings.length === 0) {
+      setError('Vui lòng thêm ít nhất 1 mã vào danh mục.');
+      return;
+    }
+    if (!apiKey) {
+      setShowKeyInput(true);
+      setError('Vui lòng nhập Anthropic API Key.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setRecommendation('');
+
+    try {
+      let summary = `=== DANH MỤC ĐẦU TƯ ===\n`;
+      summary += `Tổng vốn: ${totalCapital > 0 ? totalCapital.toLocaleString('vi-VN') : 'Chưa nhập'} VNĐ\n`;
+      summary += `Tổng đầu tư: ${portfolioStats.totalInvested.toLocaleString('vi-VN')} VNĐ\n`;
+      summary += `Giá trị thị trường: ${portfolioStats.totalMarketValue.toLocaleString('vi-VN')} VNĐ\n`;
+      summary += `Lãi/Lỗ: ${portfolioStats.totalPnl >= 0 ? '+' : ''}${portfolioStats.totalPnl.toLocaleString('vi-VN')} (${portfolioStats.totalPnlPct >= 0 ? '+' : ''}${portfolioStats.totalPnlPct.toFixed(2)}%)\n`;
+      if (totalCapital > 0) {
+        summary += `Cash còn: ${portfolioStats.cashRemaining.toLocaleString('vi-VN')} (${portfolioStats.cashPct.toFixed(1)}%)\n`;
+      }
+      summary += `\n--- CHI TIẾT TỪNG MÃ ---\n`;
+      for (const r of portfolioStats.rows) {
+        summary += `${r.symbol}: Mua ${r.buyPrice.toLocaleString('vi-VN')} x ${r.quantity.toLocaleString('vi-VN')} cp (${r.buyDate}) | Giá hiện tại: ${r.currentPrice.toLocaleString('vi-VN')} | Hôm nay: ${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(2)}% | P/L: ${r.pnl >= 0 ? '+' : ''}${r.pnl.toLocaleString('vi-VN')} (${r.pnlPct >= 0 ? '+' : ''}${r.pnlPct.toFixed(1)}%)`;
+        if (r.state) summary += ` | State: ${r.state}`;
+        if (r.qtier) summary += ` | QTier: ${r.qtier}`;
+        summary += `\n`;
+      }
+
+      // Add market context
+      const regime = data.regime;
+      summary += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
+      summary += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          stream: true,
+          system: PORTFOLIO_AI_PROMPT,
+          messages: [{ role: 'user', content: `Phân tích danh mục đầu tư sau và đưa ra khuyến nghị:\n\n${summary}` }],
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Claude API error ${response.status}: ${errText.slice(0, 300)}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                text += event.delta.text;
+                setRecommendation(text);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Lỗi không xác định');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [holdings, apiKey, totalCapital, portfolioStats, data.regime]);
+
+  const fmtVND = (n: number) => n.toLocaleString('vi-VN');
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+            <Briefcase className="w-5 h-5 text-violet-400" />
+            Danh mục đầu tư
+          </h3>
+          <p className="text-xs text-zinc-500">Quản lý danh mục, tính lãi/lỗ realtime, AI khuyến nghị</p>
+        </div>
+      </div>
+
+      {/* Total Capital */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+        <label className="text-xs text-zinc-400 mb-1 block">Tổng vốn (VNĐ)</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={capitalInput}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/\D/g, '');
+              const num = parseInt(raw, 10) || 0;
+              setCapitalInput(num > 0 ? num.toLocaleString('vi-VN') : '');
+              setTotalCapital(num);
+              localStorage.setItem(PORTFOLIO_CAPITAL_KEY, String(num));
+            }}
+            placeholder="VD: 500,000,000"
+            className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+        </div>
+      </div>
+
+      {/* Add Holding Form */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+        <p className="text-xs text-zinc-400 font-semibold">Thêm mã vào danh mục</p>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <input
+            type="text"
+            value={newSymbol}
+            onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
+            placeholder="Mã (VD: FPT)"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+          <input
+            type="text"
+            value={newBuyPrice}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d.]/g, '');
+              setNewBuyPrice(raw);
+            }}
+            placeholder="Giá vốn"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+          <input
+            type="text"
+            value={newQuantity}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/\D/g, '');
+              setNewQuantity(raw);
+            }}
+            placeholder="Số lượng"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+          <input
+            type="date"
+            value={newBuyDate}
+            onChange={(e) => setNewBuyDate(e.target.value)}
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1 border-violet-700 text-violet-400 hover:bg-violet-900/30"
+            onClick={addHolding}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Thêm
+          </Button>
+        </div>
+      </div>
+
+      {/* Portfolio Summary */}
+      {holdings.length > 0 && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <p className="text-xs text-zinc-500">Tổng đầu tư</p>
+              <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalInvested)}</p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <p className="text-xs text-zinc-500">Giá trị hiện tại</p>
+              <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalMarketValue)}</p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <p className="text-xs text-zinc-500">Lãi/Lỗ</p>
+              <p className={`text-sm font-bold ${portfolioStats.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {portfolioStats.totalPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalPnl)}
+                <span className="text-xs ml-1">({portfolioStats.totalPnlPct >= 0 ? '+' : ''}{portfolioStats.totalPnlPct.toFixed(2)}%)</span>
+              </p>
+            </div>
+            {totalCapital > 0 && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                <p className="text-xs text-zinc-500">Cash còn lại</p>
+                <p className="text-sm font-bold text-amber-400">
+                  {fmtVND(portfolioStats.cashRemaining)}
+                  <span className="text-xs ml-1">({portfolioStats.cashPct.toFixed(1)}%)</span>
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Holdings Table */}
+          <div className="rounded-lg border border-zinc-800 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-zinc-900 text-zinc-400 border-b border-zinc-800">
+                  <th className="text-left p-2 font-medium">Mã</th>
+                  <th className="text-right p-2 font-medium">Giá vốn</th>
+                  <th className="text-right p-2 font-medium">SL</th>
+                  <th className="text-right p-2 font-medium">Ngày mua</th>
+                  <th className="text-right p-2 font-medium">Giá hiện tại</th>
+                  <th className="text-right p-2 font-medium">Hôm nay</th>
+                  <th className="text-right p-2 font-medium">Giá trị</th>
+                  <th className="text-right p-2 font-medium">Lãi/Lỗ</th>
+                  <th className="text-right p-2 font-medium">%</th>
+                  <th className="p-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolioStats.rows.map((r) => (
+                  <tr key={r.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
+                    <td className="p-2 font-bold text-zinc-200">
+                      {r.symbol}
+                      {r.state && <span className="ml-1 text-[10px] text-zinc-500">{r.state}</span>}
+                    </td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.buyPrice)}</td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.quantity)}</td>
+                    <td className="text-right p-2 text-zinc-500">{r.buyDate}</td>
+                    <td className={`text-right p-2 font-medium ${r.found ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                      {fmtVND(r.currentPrice)}
+                      {!r.found && <span className="text-[10px] text-zinc-600 ml-1">?</span>}
+                    </td>
+                    <td className={`text-right p-2 ${r.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {r.changePct >= 0 ? '+' : ''}{r.changePct.toFixed(2)}%
+                    </td>
+                    <td className="text-right p-2 text-zinc-300">{fmtVND(r.marketValue)}</td>
+                    <td className={`text-right p-2 font-medium ${r.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {r.pnl >= 0 ? '+' : ''}{fmtVND(r.pnl)}
+                    </td>
+                    <td className={`text-right p-2 font-medium ${r.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {r.pnlPct >= 0 ? '+' : ''}{r.pnlPct.toFixed(1)}%
+                    </td>
+                    <td className="p-2">
+                      <button onClick={() => removeHolding(r.id)} className="text-zinc-600 hover:text-red-400">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* AI Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-zinc-300 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                AI khuyến nghị danh mục
+              </h4>
+              <Button
+                onClick={analyzePortfolio}
+                disabled={isLoading}
+                size="sm"
+                variant="outline"
+                className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              >
+                {isLoading ? (
+                  <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Đang phân tích...</>
+                ) : (
+                  <><Sparkles className="w-3.5 h-3.5" />{recommendation ? 'Phân tích lại' : 'Phân tích danh mục'}</>
+                )}
+              </Button>
+            </div>
+
+            {/* API Key Input */}
+            {showKeyInput && (
+              <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-2">
+                <p className="text-xs text-amber-400">Nhập Anthropic API Key:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-ant-api03-..."
+                    className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
+                    onClick={() => {
+                      if (apiKey.trim()) {
+                        localStorage.setItem('anthropic_api_key', apiKey.trim());
+                        setShowKeyInput(false);
+                        setError(null);
+                      }
+                    }}
+                  >
+                    Lưu
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="rounded-lg border border-red-800 bg-red-900/20 p-3">
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
+
+            {recommendation && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+                <SimpleMarkdown text={recommendation} />
+                {isLoading && (
+                  <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Đang tạo phân tích...
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Empty state */}
+      {holdings.length === 0 && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-10 text-center">
+          <Briefcase className="w-10 h-10 text-violet-500 mx-auto mb-4" />
+          <p className="text-sm text-zinc-400 max-w-md mx-auto">
+            Nhập <strong className="text-zinc-200">Tổng vốn</strong>, sau đó thêm các mã cổ phiếu bạn đang nắm giữ.
+            Hệ thống sẽ tự tính lãi/lỗ từ giá hiện tại và AI sẽ đưa ra khuyến nghị cho danh mục.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ==================== SCREENER TAB ====================
 
 function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RSStock[] }) {
@@ -1325,7 +1804,7 @@ export function StockAnalysis() {
         <AnalysisLoading />
       ) : (
         <Tabs defaultValue="to" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-zinc-900 border border-zinc-800">
+          <TabsList className="grid w-full grid-cols-5 h-auto p-1 bg-zinc-900 border border-zinc-800">
             <TabsTrigger
               value="to"
               className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
@@ -1352,6 +1831,13 @@ export function StockAnalysis() {
             >
               <BarChart3 className="w-4 h-4" />
               <span className="font-bold text-sm">Screener</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="portfolio"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-violet-400"
+            >
+              <Briefcase className="w-4 h-4" />
+              <span className="font-bold text-sm">Portfolio</span>
             </TabsTrigger>
             <TabsTrigger
               value="ai"
@@ -1428,6 +1914,11 @@ export function StockAnalysis() {
           {/* ========= SCREENER TAB ========= */}
           <TabsContent value="screener" className="space-y-4">
             <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} />
+          </TabsContent>
+
+          {/* ========= PORTFOLIO TAB ========= */}
+          <TabsContent value="portfolio" className="space-y-4">
+            <PortfolioTab data={data} />
           </TabsContent>
 
           {/* ========= AI RECOMMENDATION TAB ========= */}
