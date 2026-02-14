@@ -590,9 +590,9 @@ export async function getIntradayData(
 // --------------- Real Breadth Calculation ---------------
 
 export interface RealBreadthData {
-  vn30AboveEMA50: number;  // Percentage of VN30 stocks above SMA50
-  vnmidAboveEMA50: number; // Percentage of VNMID stocks above SMA50
-  allStockAboveEMA50: number; // Percentage of all stocks above SMA50
+  vn30AboveEMA50: number;  // Percentage of VN30 stocks above SMA50 (used as EMA50 proxy)
+  vnmidAboveEMA50: number; // Percentage of VNMID stocks above SMA50 (used as EMA50 proxy)
+  allStockAboveEMA50: number; // Percentage of all stocks above SMA50 (used as EMA50 proxy)
   vn30Slope: number;       // 5-day slope of VN30 breadth
   vnmidSlope: number;      // 5-day slope of VNMID breadth
   allSlope: number;        // 5-day slope of all stocks breadth
@@ -628,7 +628,8 @@ export async function computeRealBreadth(): Promise<RealBreadthData | null> {
       .slice(0, 300); // Limit to top 300 most liquid stocks for performance
 
     // Define VN30 symbols (top 30 by market cap on HOSE)
-    // In practice, this should be fetched from metadata, but we'll use a simplified approach
+    // TODO: Fetch actual index constituents from metadata/symbols_by_industry.csv or index API
+    // Current hardcoded list may become stale as index composition changes
     const vn30Symbols = new Set([
       "VCB", "VHM", "VNM", "VIC", "GAS", "MSN", "HPG", "MBB", "VPB", "TCB",
       "ACB", "FPT", "BID", "CTG", "PLX", "VRE", "MWG", "VJC", "STB", "POW",
@@ -636,6 +637,7 @@ export async function computeRealBreadth(): Promise<RealBreadthData | null> {
     ]);
 
     // VNMID: mid-cap stocks (roughly 30-100 by market cap)
+    // TODO: Fetch actual VNMID constituents from metadata
     const vnmidSymbols = new Set([
       "DGC", "REE", "PVD", "DHG", "DPM", "VGC", "PC1", "NT2", "HT1", "SBT",
       "DBC", "VCG", "BCM", "TCH", "GMD", "DIG", "HSG", "HCM", "BCG", "PVT",
@@ -661,20 +663,21 @@ export async function computeRealBreadth(): Promise<RealBreadthData | null> {
             if (priceData.length < 10) return null;
 
             const latest = priceData[priceData.length - 1];
-            const fiveDaysAgo = priceData[priceData.length - 6]; // 5 days ago
+            // 5 trading days ago: if today is index n-1, then 5 days ago is index n-6
+            const fiveDaysAgo = priceData[priceData.length - 6];
 
             // Check if close > sma_50 (using SMA50 as proxy for EMA50)
-            const todayAbove = latest.sma_50 !== undefined && 
+            const isTodayAboveSMA50 = latest.sma_50 !== undefined && 
                               latest.close > latest.sma_50;
-            const fiveDaysAgoAbove = fiveDaysAgo?.sma_50 !== undefined && 
+            const wasFiveDaysAgoAboveSMA50 = fiveDaysAgo?.sma_50 !== undefined && 
                                     fiveDaysAgo.close > fiveDaysAgo.sma_50;
 
             return {
               symbol: stock.symbol,
               isVN30: vn30Symbols.has(stock.symbol),
               isVNMID: vnmidSymbols.has(stock.symbol),
-              todayAbove,
-              fiveDaysAgoAbove,
+              todayAbove: isTodayAboveSMA50,
+              fiveDaysAgoAbove: wasFiveDaysAgoAboveSMA50,
             };
           } catch {
             return null;
