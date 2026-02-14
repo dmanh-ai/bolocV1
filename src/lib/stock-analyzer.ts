@@ -754,7 +754,7 @@ async function calcIndexOverviews(): Promise<IndexOverview[]> {
       rqs: 50, // Retest quality score (placeholder)
       volX,
       close: c,
-      changePct: changePct,
+      changePct,
     });
   }
   
