@@ -1434,7 +1434,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       </div>
 
       {/* Total Capital */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 mb-4">
         <label className="text-xs text-zinc-400 mb-1 block">Tổng vốn (VNĐ)</label>
         <div className="flex gap-2">
           <input
