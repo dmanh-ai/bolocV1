@@ -28,7 +28,7 @@ import {
 export type TrendPath = "S_MAJOR" | "MAJOR" | "MINOR" | "WEAK";
 export type State = "BREAKOUT" | "CONFIRM" | "RETEST" | "TREND" | "BASE" | "WEAK";
 export type MTFSync = "SYNC" | "PARTIAL" | "WEAK";
-export type QTier = "PRIME" | "VALID" | "WATCH";
+export type QTier = "PRIME" | "VALID" | "WATCH" | "AVOID";
 export type MIPhase = "PEAK" | "HIGH" | "MID" | "LOW";
 export type RSState = "Leading" | "Improving" | "Neutral" | "Weakening" | "Declining";
 export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "NEUT";
@@ -136,12 +136,16 @@ export interface AnalysisResult {
   counts: {
     prime: number;
     valid: number;
+    watch: number;
+    avoid: number;
     tier1a: number;
     tier2a: number;
     active: number;
     sync: number;
     dLead: number;
     mLead: number;
+    weak: number;
+    neut: number;
   };
   regime: MarketRegime;
   generatedAt: string;
@@ -149,42 +153,59 @@ export interface AnalysisResult {
 
 // ==================== TIER/CATEGORY CONFIGS ====================
 
+// Helper to check if stock is in higher tiers
+const isTier1A = (s: TOStock) => 
+  s.qtier === "PRIME" && (s.state === "RETEST" || s.state === "CONFIRM") && s.mtf === "SYNC";
+
+const isTier2A = (s: TOStock) => 
+  s.qtier !== "WATCH" && s.qtier !== "AVOID" && 
+  (s.state === "RETEST" || s.state === "CONFIRM") && 
+  s.mtf !== "WEAK" && 
+  !isTier1A(s);
+
+const isSMajorTrend = (s: TOStock) => 
+  s.tpaths === "S_MAJOR" && s.state === "TREND" && 
+  (s.miph === "HIGH" || s.miph === "PEAK") && 
+  !isTier1A(s) && !isTier2A(s);
+
 export const TO_TIERS: TOTierConfig[] = [
   {
     key: "tier1a",
     name: "Tier 1A - Ready",
     description: "PRIME + Entry State + SYNC | Entry tối ưu",
-    filter: (s) => s.qtier === "PRIME" && (s.state === "RETEST" || s.state === "CONFIRM") && s.mtf === "SYNC",
+    filter: isTier1A,
   },
   {
     key: "tier2a",
     name: "Tier 2A - Valid",
-    description: "VALID+ + Entry State + MTF≠WEAK | Entry được phép",
-    filter: (s) => s.qtier !== "WATCH" && (s.state === "RETEST" || s.state === "CONFIRM" || s.state === "BREAKOUT") && s.mtf !== "WEAK",
+    description: "VALID + Entry State + MTF≠WEAK | Entry được phép",
+    filter: isTier2A,
   },
   {
     key: "s_major_trend",
     name: "S_MAJOR TREND",
     description: "S_MAJOR + TREND + MI HIGH/PEAK | Giữ vị thế",
-    filter: (s) => s.tpaths === "S_MAJOR" && s.state === "TREND" && (s.miph === "HIGH" || s.miph === "PEAK"),
+    filter: isSMajorTrend,
   },
   {
     key: "fresh_breakout",
     name: "Fresh Breakout",
-    description: "BREAKOUT + VolR≥1.3 | Mới phá vỡ",
-    filter: (s) => s.state === "BREAKOUT" && s.volRatio >= 1.3,
+    description: "BREAKOUT + QT≥VALID + VolX≥1.5 | Mới phá vỡ",
+    filter: (s) => s.state === "BREAKOUT" && s.qtier !== "WATCH" && s.qtier !== "AVOID" && s.volRatio >= 1.5,
   },
   {
     key: "quality_retest",
     name: "Quality Retest",
-    description: "RETEST + MAJOR+ + RQS≥55 | Pullback chất lượng",
-    filter: (s) => s.state === "RETEST" && (s.tpaths === "S_MAJOR" || s.tpaths === "MAJOR") && s.rqs >= 55,
+    description: "RETEST + S_MAJOR + RQS≥60 | Pullback chất lượng",
+    filter: (s) => s.state === "RETEST" && s.tpaths === "S_MAJOR" && s.rqs >= 60 && 
+                   !isTier1A(s) && !isTier2A(s) && !isSMajorTrend(s),
   },
   {
     key: "pipeline",
     name: "Pipeline (BASE)",
-    description: "BASE + MI MID+ | Theo dõi",
-    filter: (s) => s.state === "BASE" && (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
+    description: "BASE + QT≥VALID + MI MID+ | Theo dõi",
+    filter: (s) => s.state === "BASE" && s.qtier !== "WATCH" && s.qtier !== "AVOID" && 
+                   (s.miph === "MID" || s.miph === "HIGH" || s.miph === "PEAK"),
   },
 ];
 
@@ -210,8 +231,8 @@ export const RS_CATEGORIES: RSCategoryConfig[] = [
   {
     key: "probe_watch",
     name: "PROBE Watch",
-    description: "Improving + Score≥45 | Sắp breakout RS",
-    filter: (s) => s.rsState === "Improving" && s.score >= 45,
+    description: "Improving + PROBE + ScoreQual≥50",
+    filter: (s) => s.rsState === "Improving" && s.score >= 50,
   },
 ];
 
@@ -315,14 +336,14 @@ function calcMTF(data: StockOHLCV[]): MTFSync {
  * NOTE: ratios from CSV are in DECIMAL form (0.15 = 15%).
  * We convert to percentage for comparison.
  *
- * V5.3 scoring: More lenient to match reference methodology.
- * - Stocks without ratio data default to VALID (tracked = quality)
- * - PRIME >= 4, VALID >= 2 (lowered from 5/2)
- * - Added ROA, PB criteria for broader coverage
- * - Price-momentum quality bonus for stocks in uptrend
+ * V5.3 scoring: Stricter thresholds to match reference distribution.
+ * - Reference distribution: PRIME 4%, VALID 8%, WATCH 19%, AVOID 69%
+ * - Stocks without ratio data default to AVOID (not VALID)
+ * - PRIME >= 8, VALID >= 5, WATCH >= 2, else AVOID
+ * - More stringent ROE/growth requirements
  */
 function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]): QTier {
-  if (!ratios) return "VALID";
+  if (!ratios) return "AVOID";
 
   // Convert decimal ratios to percentage
   const roe = ratios.roe !== undefined ? ratios.roe * 100 : undefined;
@@ -339,36 +360,38 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
 
   let score = 0;
 
-  // ROE (max 3) - primary quality indicator
-  if (roe !== undefined && roe >= 15) score += 3;
+  // ROE (max 4) - primary quality indicator, more stringent
+  if (roe !== undefined && roe >= 20) score += 4;
+  else if (roe !== undefined && roe >= 15) score += 3;
   else if (roe !== undefined && roe >= 10) score += 2;
   else if (roe !== undefined && roe >= 5) score += 1;
 
-  // ROA fallback if ROE missing (max 1)
-  if (roe === undefined && roa !== undefined && roa >= 5) score += 1;
+  // ROA fallback if ROE missing (max 2)
+  if (roe === undefined && roa !== undefined && roa >= 8) score += 2;
+  else if (roe === undefined && roa !== undefined && roa >= 5) score += 1;
 
   // Growth (max 3)
-  if (npg !== undefined && npg > 10) score += 2;
-  else if (npg !== undefined && npg > 0) score += 1;
-  if (rg !== undefined && rg > 5) score += 1;
+  if (npg !== undefined && npg > 15) score += 2;
+  else if (npg !== undefined && npg > 5) score += 1;
+  if (rg !== undefined && rg > 10) score += 1;
 
   // Valuation (max 2)
-  if (pe !== undefined && pe > 0 && pe < 15) score += 2;
-  else if (pe !== undefined && pe > 0 && pe < 25) score += 1;
+  if (pe !== undefined && pe > 0 && pe < 12) score += 2;
+  else if (pe !== undefined && pe > 0 && pe < 20) score += 1;
 
   // PB valuation (max 1)
-  if (pb !== undefined && pb > 0 && pb < 2) score += 1;
+  if (pb !== undefined && pb > 0 && pb < 1.5) score += 1;
 
   // EPS quality (max 1)
-  if (eps !== undefined && eps > 2000) score += 1;
+  if (eps !== undefined && eps > 3000) score += 1;
 
-  // Margins (max 1)
-  if (npm !== undefined && npm > 8) score += 1;
-  else if (gm !== undefined && gm > 15) score += 1;
+  // Margins (max 2)
+  if (npm !== undefined && npm > 10) score += 2;
+  else if (npm !== undefined && npm > 5) score += 1;
 
   // Solvency (max 2)
-  if (cr !== undefined && cr >= 1.2) score += 1;
-  if (de !== undefined && de < 2) score += 1;
+  if (cr !== undefined && cr >= 1.5) score += 1;
+  if (de !== undefined && de < 1.5) score += 1;
 
   // Price-momentum quality bonus (max 1)
   // Stocks in strong uptrend tend to have quality characteristics
@@ -380,10 +403,12 @@ function calcQTier(ratios: CompanyRatios | undefined, priceData?: StockOHLCV[]):
     if (c > sma50 && sma50 > sma200) score += 1;
   }
 
-  // Max possible: 3 + 1 + 3 + 2 + 1 + 1 + 1 + 2 + 1 = 15
-  if (score >= 4) return "PRIME";
-  if (score >= 2) return "VALID";
-  return "WATCH";
+  // Max possible: 4 + 2 + 3 + 2 + 1 + 1 + 2 + 2 + 1 = 18
+  // Adjusted thresholds to match reference distribution
+  if (score >= 8) return "PRIME";    // ~4%
+  if (score >= 5) return "VALID";    // ~8%
+  if (score >= 2) return "WATCH";    // ~19%
+  return "AVOID";                     // ~69%
 }
 
 function calcMIPhase(data: StockOHLCV[]): { miph: MIPhase; mi: number } {
@@ -777,7 +802,7 @@ function buildRegime(
     allocation = "40-60%";
     allocDesc = "Chọn lọc. Chỉ Tier 1A. Giảm size. Bảo vệ vốn.";
   } else {
-    allocation = "0-20%";
+    allocation = "0-10%";
     allocDesc = "Phòng thủ. Không mở mới. Chờ tín hiệu phục hồi.";
   }
 
@@ -850,11 +875,12 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
       gtgd,
     };
   })
-    .filter((s) => s.closePrice > 0)
-    .sort((a, b) => b.marketCap - a.marketCap);
+    .filter((s) => s.closePrice > 0 && s.gtgd >= 10) // Filter by GTGD >= 10 tỷ VND
+    .sort((a, b) => b.gtgd - a.gtgd); // Sort by GTGD (liquidity) instead of market cap
 
-  // Step 4: Take top N symbols for detailed analysis (no strict GTGD filter)
-  const toAnalyze = universe.slice(0, topN);
+  // Step 4: Analyze ALL stocks with GTGD >= 10B (not limited to topN)
+  // Note: topN parameter is now ignored in favor of GTGD filter
+  const toAnalyze = universe;
 
   // Step 5: Batch fetch price histories
   const toStocks: TOStock[] = [];
@@ -956,12 +982,16 @@ export async function runFullAnalysis(topN = 200): Promise<AnalysisResult> {
     counts: {
       prime: toStocks.filter((s) => s.qtier === "PRIME").length,
       valid: toStocks.filter((s) => s.qtier === "VALID").length,
+      watch: toStocks.filter((s) => s.qtier === "WATCH").length,
+      avoid: toStocks.filter((s) => s.qtier === "AVOID").length,
       tier1a: toTiers.tier1a.length,
       tier2a: toTiers.tier2a.length,
       active: rsStocks.filter((s) => s.isActive).length,
-      sync: rsCats.sync_active.length,
-      dLead: rsCats.d_lead_active.length,
-      mLead: rsCats.m_lead_active.length,
+      sync: rsStocks.filter((s) => s.vector === "SYNC").length,
+      dLead: rsStocks.filter((s) => s.vector === "D_LEAD").length,
+      mLead: rsStocks.filter((s) => s.vector === "M_LEAD").length,
+      weak: rsStocks.filter((s) => s.bucket === "WEAK").length,
+      neut: rsStocks.filter((s) => s.vector === "NEUT").length,
     },
     regime,
     generatedAt: new Date().toISOString(),
