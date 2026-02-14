@@ -863,6 +863,93 @@ function AnalysisLoading() {
   );
 }
 
+// ==================== SCREENER TAB ====================
+
+function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RSStock[] }) {
+  const [filterState, setFilterState] = useState<State | 'ALL'>('ALL');
+  const [filterQTier, setFilterQTier] = useState<QTier | 'ALL'>('ALL');
+  const [filterTPath, setFilterTPath] = useState<TrendPath | 'ALL'>('ALL');
+  const [filterMTF, setFilterMTF] = useState<MTFSync | 'ALL'>('ALL');
+
+  const filtered = useMemo(() => {
+    return toStocks.filter(s => {
+      if (filterState !== 'ALL' && s.state !== filterState) return false;
+      if (filterQTier !== 'ALL' && s.qtier !== filterQTier) return false;
+      if (filterTPath !== 'ALL' && s.tpaths !== filterTPath) return false;
+      if (filterMTF !== 'ALL' && s.mtf !== filterMTF) return false;
+      return true;
+    });
+  }, [toStocks, filterState, filterQTier, filterTPath, filterMTF]);
+
+  return (
+    <div className="space-y-4">
+      {/* Filter bar */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-zinc-500">State:</span>
+            <select
+              value={filterState}
+              onChange={(e) => setFilterState(e.target.value as State | 'ALL')}
+              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+            >
+              <option value="ALL">ALL</option>
+              {(['BREAKOUT', 'CONFIRM', 'RETEST', 'TREND', 'BASE', 'WEAK'] as State[]).map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-zinc-500">QTier:</span>
+            <select
+              value={filterQTier}
+              onChange={(e) => setFilterQTier(e.target.value as QTier | 'ALL')}
+              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+            >
+              <option value="ALL">ALL</option>
+              {(['PRIME', 'VALID', 'WATCH', 'AVOID'] as QTier[]).map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-zinc-500">TPath:</span>
+            <select
+              value={filterTPath}
+              onChange={(e) => setFilterTPath(e.target.value as TrendPath | 'ALL')}
+              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+            >
+              <option value="ALL">ALL</option>
+              {(['S_MAJOR', 'MAJOR', 'MINOR', 'WEAK'] as TrendPath[]).map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-zinc-500">MTF:</span>
+            <select
+              value={filterMTF}
+              onChange={(e) => setFilterMTF(e.target.value as MTFSync | 'ALL')}
+              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+            >
+              <option value="ALL">ALL</option>
+              {(['SYNC', 'PARTIAL', 'WEAK'] as MTFSync[]).map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center">
+            <span className="text-xs font-bold text-amber-400">{filtered.length} / {toStocks.length} stocks</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Full stock table */}
+      <TOTable stocks={filtered} />
+    </div>
+  );
+}
+
 // ==================== MAIN COMPONENT ====================
 
 export function StockAnalysis() {
@@ -879,10 +966,10 @@ export function StockAnalysis() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-100">
-            Stock Setups V5.3
+            Market Dashboard V3
           </h1>
           <p className="text-sm text-zinc-500">
-            Technical Oscillator + Relative Strength | All Stocks
+            TO Best Setups + RS Best Setups | All Stocks
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -908,24 +995,14 @@ export function StockAnalysis() {
       {isLoading || !data ? (
         <AnalysisLoading />
       ) : (
-        <Tabs defaultValue="regime" className="space-y-4">
+        <Tabs defaultValue="to" className="space-y-4">
           <TabsList className="grid w-full grid-cols-3 h-auto p-1 bg-zinc-900 border border-zinc-800">
-            <TabsTrigger
-              value="regime"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span className="font-bold text-sm">Market Regime</span>
-              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ml-1 ${REGIME_COLORS[data.regime.regime]}`}>
-                {data.regime.regime}
-              </span>
-            </TabsTrigger>
             <TabsTrigger
               value="to"
               className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
             >
               <Activity className="w-4 h-4" />
-              <span className="font-bold text-sm">TO Best Setups</span>
+              <span className="font-bold text-sm">TO</span>
               <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
                 {data.toStocks.length}
               </Badge>
@@ -935,27 +1012,27 @@ export function StockAnalysis() {
               className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-blue-400"
             >
               <Zap className="w-4 h-4" />
-              <span className="font-bold text-sm">RS Best Setups</span>
+              <span className="font-bold text-sm">RS</span>
               <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
                 {data.rsStocks.length}
               </Badge>
             </TabsTrigger>
+            <TabsTrigger
+              value="screener"
+              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="font-bold text-sm">Screener</span>
+            </TabsTrigger>
           </TabsList>
 
-          {/* ========= MARKET REGIME TAB ========= */}
-          <TabsContent value="regime" className="space-y-4">
+          {/* ========= TO TAB ========= */}
+          <TabsContent value="to" className="space-y-4">
+            {/* Compact Market Regime at top */}
             <MarketRegimePanel
               regime={data.regime}
               distribution={data.distribution}
             />
-          </TabsContent>
-
-          {/* ========= TO TAB ========= */}
-          <TabsContent value="to" className="space-y-4">
-            {/* Header info */}
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
-              <span className="text-sm font-bold text-zinc-200">Tổ hợp TO — {data.totalStocks} mã phân tích</span>
-            </div>
 
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
@@ -988,11 +1065,6 @@ export function StockAnalysis() {
 
           {/* ========= RS TAB ========= */}
           <TabsContent value="rs" className="space-y-4">
-            {/* Header info */}
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
-              <span className="text-sm font-bold text-zinc-200">Tổ hợp RS — {data.rsStocks.length} mã phân tích</span>
-            </div>
-
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               <StatCard label="Total" value={data.rsStocks.length} />
@@ -1015,6 +1087,11 @@ export function StockAnalysis() {
                 <RSTable stocks={data.rsCats[cat.key] || []} />
               </TierSection>
             ))}
+          </TabsContent>
+
+          {/* ========= SCREENER TAB ========= */}
+          <TabsContent value="screener" className="space-y-4">
+            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} />
           </TabsContent>
         </Tabs>
       )}
