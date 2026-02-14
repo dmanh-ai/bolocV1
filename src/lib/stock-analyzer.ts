@@ -649,7 +649,9 @@ function layerSignal(score: number): RegimeState {
 
 function determineIndexState(mi: number, tpath: TrendPath, miph: MIPhase, dMI_D?: number, dMI_W?: number): { state: string; stateNum: number } {
   // EXIT override: deteriorating momentum overrides all other states
+  // Weekly momentum threshold: dMI_W < -5 indicates strong weekly decline
   if (dMI_W !== undefined && dMI_W < -5) return { state: "7.EXIT", stateNum: 7 };
+  // Daily momentum threshold: dMI_D < -3 with mi < 70 indicates daily decline without strong peak
   if (dMI_D !== undefined && dMI_D < -3 && mi < 70) return { state: "7.EXIT", stateNum: 7 };
   
   // State numbering system based on MI and trend
@@ -890,7 +892,7 @@ function calcLayer3BreadthV2(indices: IndexOverview[]): Layer3Breadth {
   
   // Simulate breadth % (in real impl, would fetch actual stock breadth)
   // More conservative estimation that matches reference
-  // Reference: MI=66.6 → ~47% (not 54.9%)
+  // Reference: MI=66.6 → ~47% (previous formula incorrectly gave 54.9%)
   const vn30AboveEMA50 = vn30 ? Math.min(100, Math.max(0, vn30.mi * 0.75 - 3)) : 50;
   const vnmidAboveEMA50 = vnmid ? Math.min(100, Math.max(0, vnmid.mi * 0.65 - 2)) : 50;
   const allStockAboveEMA50 = vnindex ? Math.min(100, Math.max(0, vnindex.mi * 0.70 - 2)) : 50;
