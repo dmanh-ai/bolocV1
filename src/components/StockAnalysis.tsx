@@ -415,211 +415,429 @@ function RegimeScoreBar({ score, label }: { score: number; label?: string }) {
   );
 }
 
-// ==================== LAYER CARD ====================
+// ==================== MARKET REGIME PANEL ====================
 
-function LayerCard({ layer, num: layerNum }: { layer: RegimeLayer; num: number }) {
-  const Icon = REGIME_ICON[layer.signal];
+// Badge color mapping for regime layers
+const REGIME_BADGE_COLORS: Record<string, string> = {
+  LIMITED: 'bg-green-500 text-white',
+  CHECK: 'bg-green-500 text-white',
+  ALL_WEAK: 'bg-red-500 text-white border-2 border-red-500',
+  LOW: 'bg-red-500 text-white',
+  MED: 'bg-amber-500 text-white',
+  HIGH: 'bg-green-500 text-white',
+  CLEAR: 'bg-green-500 text-white',
+  ROTATING: 'bg-amber-500 text-white',
+};
+
+// Score multipliers for regime calculation
+const POSITIVE_SCORE_MULTIPLIER = 1.00;
+const NEGATIVE_SCORE_MULTIPLIER = 0.50;
+
+// Minimum threshold for showing labels in distribution charts (5%)
+const MIN_CHART_LABEL_THRESHOLD = 0.05;
+
+// Helper function to convert boolean to Yes/No
+const boolToYesNo = (value: boolean): string => value ? 'Yes' : 'No';
+
+// Action guide text mapping
+const ACTION_GUIDES: Record<RegimeState, { title: string; bullets: string[] }> = {
+  BLOCKED: {
+    title: 'HƯỚNG DẪN HÀNH ĐỘNG — BLOCKED',
+    bullets: [
+      '• KHÔNG mở vị thế mới — toàn bộ index đều EXIT',
+      '• Chuyển cash, bảo toàn vốn là ưu tiên số 1',
+      '• Tín hiệu dẫn đường (breadth/rotation) chỉ để CHUẨN BỊ, không phải hành động',
+      '• Theo dõi: index nào thoát EXIT trước → xác định hướng đi tiếp theo',
+    ],
+  },
+  BEAR: {
+    title: 'HƯỚNG DẪN HÀNH ĐỘNG — BEAR',
+    bullets: [
+      '• Phòng thủ. Không mở mới.',
+      '• Chờ tín hiệu phục hồi.',
+      '• Bảo vệ vốn là ưu tiên.',
+    ],
+  },
+  NEUTRAL: {
+    title: 'HƯỚNG DẪN HÀNH ĐỘNG — NEUTRAL',
+    bullets: [
+      '• Chọn lọc. Chỉ Tier 1A.',
+      '• Giảm size.',
+      '• Bảo vệ vốn.',
+    ],
+  },
+  BULL: {
+    title: 'HƯỚNG DẪN HÀNH ĐỘNG — BULL',
+    bullets: [
+      '• Ưu tiên giải ngân.',
+      '• Tìm Tier 1A/2A.',
+      '• Giữ vị thế Trend.',
+    ],
+  },
+};
+
+function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: { 
+  regime: MarketRegime; 
+  counts: AnalysisResult['counts'];
+  totalStocks: number;
+  rsStocks: RSStock[];
+}) {
+  const actionGuide = ACTION_GUIDES[regime.regime] || ACTION_GUIDES.NEUTRAL;
+  
+  // Calculate RS Vector distribution
+  // Note: WEAK is approximated as NEUT stocks that are not active
+  const rsVectorCounts = {
+    SYNC: rsStocks.filter(s => s.vector === 'SYNC').length,
+    D_LEAD: rsStocks.filter(s => s.vector === 'D_LEAD').length,
+    M_LEAD: rsStocks.filter(s => s.vector === 'M_LEAD').length,
+    WEAK: rsStocks.filter(s => s.vector === 'NEUT' && !s.isActive).length,
+    NEUT: rsStocks.filter(s => s.vector === 'NEUT').length,
+  };
+  const rsTotal = rsStocks.length;
+
+  // Determine regime text color
+  const regimeTextColor = REGIME_TEXT[regime.regime] || 'text-zinc-400';
+  const scoreMultiplier = regime.score >= 0 ? POSITIVE_SCORE_MULTIPLIER : NEGATIVE_SCORE_MULTIPLIER;
+
   return (
-    <div className={`rounded-lg border p-4 space-y-3 ${REGIME_BG[layer.signal]}`}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800 rounded px-1.5 py-0.5">L{layerNum}</span>
-          <span className="font-bold text-sm text-zinc-100">{layer.label}</span>
+    <div className="space-y-4">
+      {/* Section 1: Top Banner */}
+      <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className={`text-3xl font-black ${regimeTextColor}`}>{regime.regime}</span>
+          </div>
+          <div className="text-right">
+            <div className="text-lg font-bold text-zinc-100">Stop: {regime.allocation}</div>
+            <div className="text-sm text-zinc-400">{regime.regime} × {scoreMultiplier.toFixed(2)} | {regime.allocation}</div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold ${REGIME_COLORS[layer.signal]}`}>
-            <Icon className="w-3 h-3" />
-            {layer.signal}
+      </div>
+
+      {/* Section 2: Current Regime Box */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <div className="text-xs text-zinc-500 uppercase mb-2">CURRENT REGIME</div>
+            <div className="text-3xl font-black text-zinc-100">{regime.regime}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-zinc-500 uppercase mb-2">ALLOCATION</div>
+            <div className="text-xl font-bold text-zinc-100">{regime.allocation}</div>
+          </div>
+        </div>
+        
+        <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 mb-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-zinc-400">PREVIOUS:</span>
+            <span className="font-bold text-zinc-100">{regime.regime}</span>
+            <span className="text-zinc-600">→</span>
+            <span className="text-zinc-400">CURRENT:</span>
+            <span className="font-bold text-zinc-100">{regime.regime}</span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+            {regime.layer4Output.badge}
+          </span>
+          <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500 text-white">
+            Code: {regime.score}
+          </span>
+          <span className="px-2 py-1 rounded text-xs font-bold bg-red-500 text-white">
+            ×{scoreMultiplier.toFixed(2)}
+          </span>
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+            {regime.layer3Breadth.badge}
           </span>
         </div>
       </div>
-      <RegimeScoreBar score={layer.score} />
-      <div className="space-y-1">
-        {layer.details.slice(0, 4).map((d, i) => (
-          <p key={i} className="text-[11px] text-zinc-400">{d}</p>
-        ))}
-      </div>
-    </div>
-  );
-}
 
-// ==================== MARKET REGIME PANEL ====================
-
-function MarketRegimePanel({ regime }: { regime: MarketRegime }) {
-  const Icon = REGIME_ICON[regime.regime];
-  return (
-    <div className="space-y-4">
-      {/* Overall Regime Assessment */}
-      <div className={`rounded-xl border-2 p-5 ${REGIME_BG[regime.regime]}`}>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-lg font-bold text-zinc-100">Market Regime Assessment</h3>
-            <p className="text-xs text-zinc-500">4-Layer Framework V5.3</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-lg font-black ${REGIME_COLORS[regime.regime]}`}>
-              <Icon className="w-5 h-5" />
-              {regime.regime}
-            </span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          <div className="text-center p-2 rounded-lg bg-zinc-900/50">
-            <span className="text-[10px] text-zinc-500 uppercase">Overall Score</span>
-            <p className={`text-xl font-bold font-mono ${REGIME_TEXT[regime.regime]}`}>
-              {regime.score > 0 ? '+' : ''}{regime.score}
-            </p>
-          </div>
-          <div className="text-center p-2 rounded-lg bg-zinc-900/50">
-            <span className="text-[10px] text-zinc-500 uppercase">Allocation</span>
-            <p className={`text-xl font-bold font-mono ${REGIME_TEXT[regime.regime]}`}>{regime.allocation}</p>
-          </div>
-          <div className="text-center p-2 rounded-lg bg-zinc-900/50 col-span-2">
-            <span className="text-[10px] text-zinc-500 uppercase">Guideline</span>
-            <p className="text-sm text-zinc-300 mt-0.5">{regime.allocDesc}</p>
-          </div>
-        </div>
-        <RegimeScoreBar score={regime.score} label="Overall" />
-      </div>
-
-      {/* 4-Layer Framework */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {regime.indexLayer && <LayerCard layer={regime.indexLayer} num={1} />}
-        {regime.breadthLayer && <LayerCard layer={regime.breadthLayer} num={2} />}
-        {regime.momentumLayer && <LayerCard layer={regime.momentumLayer} num={3} />}
-        {regime.flowLayer && <LayerCard layer={regime.flowLayer} num={4} />}
-      </div>
-
-      {/* Index Overview */}
-      {regime.indexLayer && (
-        <div className="rounded-lg border border-zinc-800 p-4">
-          <h4 className="font-bold text-sm text-zinc-200 mb-3">Index Overview - VN-Index</h4>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">VN-Index</span>
-              <span className="text-base font-bold font-mono text-zinc-100">{regime.indexLayer.vnindex.toLocaleString('en', { maximumFractionDigits: 1 })}</span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">Change</span>
-              <span className={`text-base font-bold font-mono ${regime.indexLayer.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.indexLayer.changePct >= 0 ? '+' : ''}{regime.indexLayer.changePct.toFixed(2)}%
-              </span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">SMA 20</span>
-              <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma20 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.indexLayer.sma20.toLocaleString('en', { maximumFractionDigits: 1 })}
-              </span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">SMA 50</span>
-              <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma50 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.indexLayer.sma50.toLocaleString('en', { maximumFractionDigits: 1 })}
-              </span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">SMA 200</span>
-              <span className={`text-sm font-mono ${regime.indexLayer.vnindex > regime.indexLayer.sma200 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.indexLayer.sma200.toLocaleString('en', { maximumFractionDigits: 1 })}
-              </span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">RSI 14</span>
-              <span className={`text-sm font-mono ${regime.indexLayer.rsi >= 50 ? 'text-green-400' : regime.indexLayer.rsi <= 30 ? 'text-red-400' : 'text-amber-400'}`}>
-                {regime.indexLayer.rsi.toFixed(1)}
-              </span>
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <span className="text-[10px] text-zinc-500">Trend:</span>
-            <span className={`text-xs font-bold ${
-              regime.indexLayer.trend === 'Uptrend' ? 'text-green-400' :
-              regime.indexLayer.trend === 'Downtrend' ? 'text-red-400' : 'text-amber-400'
-            }`}>{regime.indexLayer.trend}</span>
-            <span className="text-[10px] text-zinc-500 ml-3">MACD:</span>
-            <span className={`text-xs font-mono ${regime.indexLayer.macd > regime.indexLayer.macdSignal ? 'text-green-400' : 'text-red-400'}`}>
-              {regime.indexLayer.macd.toFixed(2)}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Breadth Analysis */}
-      {regime.breadthLayer && (
-        <div className="rounded-lg border border-zinc-800 p-4">
-          <h4 className="font-bold text-sm text-zinc-200 mb-3">Breadth Analysis</h4>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">Advancing</span>
-              <span className="text-base font-bold font-mono text-green-400">{regime.breadthLayer.advancing}</span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">Declining</span>
-              <span className="text-base font-bold font-mono text-red-400">{regime.breadthLayer.declining}</span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">Unchanged</span>
-              <span className="text-base font-bold font-mono text-zinc-400">{regime.breadthLayer.unchanged}</span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">A/D Ratio</span>
-              <span className={`text-base font-bold font-mono ${regime.breadthLayer.adRatio >= 1 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.breadthLayer.adRatio.toFixed(2)}
-              </span>
-            </div>
-            <div className="text-center">
-              <span className="text-[10px] text-zinc-500 uppercase block">Net A/D</span>
-              <span className={`text-base font-bold font-mono ${regime.breadthLayer.netAD >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {regime.breadthLayer.netAD > 0 ? '+' : ''}{regime.breadthLayer.netAD}
-              </span>
-            </div>
-          </div>
-          {/* Visual AD bar */}
-          <div className="mt-3">
-            <div className="flex h-3 rounded-full overflow-hidden bg-zinc-800">
-              {(regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged) > 0 && (
-                <>
-                  <div
-                    className="bg-green-500 transition-all"
-                    style={{ width: `${(regime.breadthLayer.advancing / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
-                  />
-                  <div
-                    className="bg-zinc-500 transition-all"
-                    style={{ width: `${(regime.breadthLayer.unchanged / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
-                  />
-                  <div
-                    className="bg-red-500 transition-all"
-                    style={{ width: `${(regime.breadthLayer.declining / (regime.breadthLayer.advancing + regime.breadthLayer.declining + regime.breadthLayer.unchanged)) * 100}%` }}
-                  />
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Allocation Guidelines */}
-      <div className="rounded-lg border border-zinc-800 p-4">
-        <h4 className="font-bold text-sm text-zinc-200 mb-3">Allocation Guidelines</h4>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {[
-            { regime: 'BULL' as RegimeState, alloc: '80-100%', desc: 'Full exposure. Tier 1A/2A entries. Hold trends.' },
-            { regime: 'NEUTRAL' as RegimeState, alloc: '40-60%', desc: 'Selective. Only Tier 1A. Reduce size.' },
-            { regime: 'BEAR' as RegimeState, alloc: '0-20%', desc: 'Defensive. No new entries. Wait for recovery.' },
-          ].map((g) => (
-            <div
-              key={g.regime}
-              className={`rounded-lg border p-3 ${regime.regime === g.regime ? REGIME_BG[g.regime] + ' ring-1 ring-offset-0' : 'border-zinc-800 opacity-50'}`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${REGIME_COLORS[g.regime]}`}>
-                  {g.regime}
-                </span>
-                <span className="text-sm font-bold font-mono text-zinc-200">{g.alloc}</span>
-              </div>
-              <p className="text-[11px] text-zinc-400">{g.desc}</p>
-            </div>
+      {/* Section 3: Action Guide */}
+      <div className="rounded-lg border-l-4 border-amber-500 bg-amber-500/10 p-4">
+        <h4 className="font-bold text-sm text-zinc-100 mb-3">{actionGuide.title}</h4>
+        <div className="space-y-1">
+          {actionGuide.bullets.map((bullet, i) => (
+            <p key={i} className="text-xs text-zinc-300">{bullet}</p>
           ))}
+        </div>
+      </div>
+
+      {/* Section 4: 4-LAYER FRAMEWORK */}
+      <div>
+        <h3 className="text-lg font-bold text-zinc-100 mb-3">4-LAYER FRAMEWORK</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Card 1 - LAYER 1 */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex items-start justify-between mb-2">
+              <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 1</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer1Ceiling.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+                {regime.layer1Ceiling.badge}
+              </span>
+            </div>
+            <div className="text-xs text-zinc-500 mb-2">VNINDEX TO (Ceiling)</div>
+            <div className="text-xl font-black text-zinc-100 mb-3">{regime.layer1Ceiling.status}</div>
+            <div className="space-y-1 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-400">Broken:</span>
+                <span className="text-amber-500">⚠ {boolToYesNo(regime.layer1Ceiling.broken)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-400">Weak:</span>
+                <span className="text-amber-500">⚠ {boolToYesNo(regime.layer1Ceiling.weak)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2 - LAYER 2 */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex items-start justify-between mb-2">
+              <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 2</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer2Components.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+                {regime.layer2Components.badge}
+              </span>
+            </div>
+            <div className="text-xs text-zinc-500 mb-2">Components (Rotation)</div>
+            <div className="text-xl font-black text-zinc-100 mb-3">{regime.layer2Components.status}</div>
+            <div className="space-y-1 text-xs">
+              <div className="text-zinc-300">VN30: {regime.layer2Components.vn30Status} (dMI: {regime.layer2Components.vn30dMI >= 0 ? '+' : ''}{regime.layer2Components.vn30dMI.toFixed(0)})</div>
+              <div className="text-zinc-300">VNMID: {regime.layer2Components.vnmidStatus} (dMI: {regime.layer2Components.vnmiddMI >= 0 ? '+' : ''}{regime.layer2Components.vnmiddMI.toFixed(0)})</div>
+              <div className="text-zinc-400">Rotation: {regime.layer2Components.rotation}</div>
+            </div>
+          </div>
+
+          {/* Card 3 - LAYER 3 */}
+          <div className={`rounded-lg border p-4 ${regime.layer3Breadth.badge === 'ALL_WEAK' ? 'border-red-500 bg-zinc-950' : 'border-zinc-800 bg-zinc-950'}`}>
+            <div className="flex items-start justify-between mb-2">
+              <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 3</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+                {regime.layer3Breadth.badge}
+              </span>
+            </div>
+            <div className="text-xs text-zinc-500 mb-2">Breadth V2 (Quadrant)</div>
+            <div className="text-xl font-black text-zinc-100 mb-3">AllStock {regime.layer3Breadth.allStockQuadrant}</div>
+            <div className="space-y-1 text-xs">
+              <div className="text-zinc-300">VN30: {regime.layer3Breadth.vn30Breadth.quadrant} {regime.layer3Breadth.vn30Breadth.aboveEMA50Pct.toFixed(0)}% (s {regime.layer3Breadth.vn30Breadth.slope5d >= 0 ? '+' : ''}{regime.layer3Breadth.vn30Breadth.slope5d.toFixed(1)})</div>
+              <div className="text-zinc-300">VNMID: {regime.layer3Breadth.vnmidBreadth.quadrant} {regime.layer3Breadth.vnmidBreadth.aboveEMA50Pct.toFixed(0)}% (s {regime.layer3Breadth.vnmidBreadth.slope5d >= 0 ? '+' : ''}{regime.layer3Breadth.vnmidBreadth.slope5d.toFixed(1)})</div>
+              <div className="text-zinc-300">All: {regime.layer3Breadth.allStockQuadrant}: {regime.layer3Breadth.signal} {regime.layer3Breadth.allStockAboveEMA50.toFixed(1)}%</div>
+              <div className="text-green-400">Base: {regime.layer3Breadth.base}</div>
+            </div>
+          </div>
+
+          {/* Card 4 - LAYER 4 */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex items-start justify-between mb-2">
+              <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 4</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+                {regime.layer4Output.badge}
+              </span>
+            </div>
+            <div className="text-xs text-zinc-500 mb-2">Regime Output</div>
+            <div className="text-xl font-black text-zinc-100 mb-3">{regime.regime}</div>
+            <div className="space-y-1 text-xs">
+              <div className="text-zinc-300">Base: <span className="font-bold">{regime.layer4Output.base}</span> → Ceiling: <span className="font-bold">{regime.layer4Output.ceilingStatus}</span></div>
+              <div className="text-zinc-300">Dir: <span className="font-bold">{regime.layer4Output.direction}</span> | Mode: <span className="font-bold">{regime.layer4Output.mode}</span></div>
+              <div className="text-zinc-300">Lead: <span className="font-bold">{regime.layer4Output.lead}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 5: INDEX OVERVIEW — LAYER 1 CEILING */}
+      <div>
+        <h3 className="text-lg font-bold text-zinc-100 mb-3">INDEX OVERVIEW — LAYER 1 CEILING</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {regime.indices.map((index) => {
+            const price = index.close || regime.indexLayer?.vnindex || 0;
+            const changePct = index.changePct || regime.indexLayer?.changePct || 0;
+            
+            return (
+              <div key={index.symbol} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <span className="text-sm font-bold text-zinc-100">{index.symbol}</span>
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500 text-white">
+                    {index.state}
+                  </span>
+                </div>
+                <div className="mb-3">
+                  <span className="text-2xl font-bold text-zinc-100">{price > 0 ? price.toLocaleString('en', { maximumFractionDigits: 2 }) : 'N/A'}</span>
+                  {changePct !== 0 && (
+                    <span className={`ml-2 text-sm font-bold ${changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1 text-xs text-zinc-400">
+                  <div>MI: {index.mi.toFixed(1)} ({index.miPhase}) | TPath: {index.tpath}</div>
+                  <div>MI D/W/M: {index.miD.toFixed(0)}/{index.miW.toFixed(0)}/{index.miM.toFixed(0)}</div>
+                  <div>dMI_D: {index.dMI_D >= 0 ? '+' : ''}{index.dMI_D.toFixed(1)} | dMI_W: {index.dMI_W >= 0 ? '+' : ''}{index.dMI_W.toFixed(1)}</div>
+                  <div>BQS: {index.bqs.toFixed(0)} | RQS: {index.rqs.toFixed(0)} | VolX: {index.volX.toFixed(1)} | Normal</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Section 6: BREADTH ANALYSIS — LAYER 3 QUADRANT */}
+      <div>
+        <h3 className="text-lg font-bold text-zinc-100 mb-3">BREADTH ANALYSIS — LAYER 3 QUADRANT</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            { name: 'VN30', breadthData: regime.layer3Breadth.vn30Breadth, isAll: false },
+            { name: 'VNMID', breadthData: regime.layer3Breadth.vnmidBreadth, isAll: false },
+            { name: 'ALLSTOCK', breadthData: null, isAll: true },
+          ].map((item) => {
+            const aboveEMA50 = item.isAll 
+              ? regime.layer3Breadth.allStockAboveEMA50 
+              : (item.breadthData?.aboveEMA50Pct || 0);
+            const quadrant = item.isAll 
+              ? regime.layer3Breadth.allStockQuadrant 
+              : (item.breadthData?.quadrant || 'Q3');
+            const slope5d = item.isAll ? 0 : (item.breadthData?.slope5d || 0);
+            const slope10d = item.isAll ? 0 : (item.breadthData?.slope10d || 0);
+            const accel = item.isAll ? 0 : (item.breadthData?.accel || 0);
+            
+            const quadrantLabel = quadrant === 'Q1' ? 'Bull' : quadrant === 'Q2' ? 'Weak Bull' : quadrant === 'Q3' ? 'Bear' : 'Weak Bear';
+            
+            return (
+              <div key={item.name} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <div className="text-sm font-bold text-zinc-100 mb-2">{item.name}</div>
+                <div className="mb-3">
+                  <span className={`text-lg font-black ${quadrant === 'Q3' ? 'text-red-500' : quadrant === 'Q1' ? 'text-green-500' : 'text-amber-500'}`}>
+                    {quadrant}: {quadrantLabel}
+                  </span>
+                </div>
+                <div className="mb-3">
+                  <div className="h-3 rounded-full bg-zinc-800 overflow-hidden">
+                    <div 
+                      className="h-full bg-green-500 transition-all"
+                      style={{ width: `${aboveEMA50}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1 text-xs text-zinc-400">
+                  {/* Note: EMA10 data not available, showing EMA50 for both as placeholder */}
+                  <div>Trên EMA50: {aboveEMA50.toFixed(1)}% (EMA10: {aboveEMA50.toFixed(1)}%)</div>
+                  {!item.isAll && (
+                    <>
+                      <div>Slope 5d: {slope5d.toFixed(2)} | 10d: {slope10d.toFixed(2)}</div>
+                      <div>Accel: {accel.toFixed(2)}</div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Section 7: DISTRIBUTION SUMMARY */}
+      <div>
+        <h3 className="text-lg font-bold text-zinc-100 mb-3">DISTRIBUTION SUMMARY</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* RS VECTOR */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <h4 className="text-sm font-bold text-zinc-200 mb-3">RS VECTOR ({rsTotal} STOCKS)</h4>
+            <div className="space-y-2">
+              <div className="flex h-8 rounded overflow-hidden">
+                {rsVectorCounts.SYNC > 0 && (
+                  <div 
+                    className="bg-green-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(rsVectorCounts.SYNC / rsTotal) * 100}%` }}
+                  >
+                    {rsVectorCounts.SYNC > rsTotal * MIN_CHART_LABEL_THRESHOLD && `SYNC: ${rsVectorCounts.SYNC}`}
+                  </div>
+                )}
+                {rsVectorCounts.D_LEAD > 0 && (
+                  <div 
+                    className="bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(rsVectorCounts.D_LEAD / rsTotal) * 100}%` }}
+                  >
+                    {rsVectorCounts.D_LEAD > rsTotal * MIN_CHART_LABEL_THRESHOLD && `D_LEAD: ${rsVectorCounts.D_LEAD}`}
+                  </div>
+                )}
+                {rsVectorCounts.M_LEAD > 0 && (
+                  <div 
+                    className="bg-cyan-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(rsVectorCounts.M_LEAD / rsTotal) * 100}%` }}
+                  >
+                    {rsVectorCounts.M_LEAD > rsTotal * MIN_CHART_LABEL_THRESHOLD && `M_LEAD: ${rsVectorCounts.M_LEAD}`}
+                  </div>
+                )}
+                {rsVectorCounts.WEAK > 0 && (
+                  <div 
+                    className="bg-red-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(rsVectorCounts.WEAK / rsTotal) * 100}%` }}
+                  >
+                    {rsVectorCounts.WEAK > rsTotal * MIN_CHART_LABEL_THRESHOLD && `WEAK: ${rsVectorCounts.WEAK}`}
+                  </div>
+                )}
+                {rsVectorCounts.NEUT > 0 && (
+                  <div 
+                    className="bg-zinc-600 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(rsVectorCounts.NEUT / rsTotal) * 100}%` }}
+                  >
+                    {rsVectorCounts.NEUT > rsTotal * MIN_CHART_LABEL_THRESHOLD && `NEUT: ${rsVectorCounts.NEUT}`}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="text-green-400">SYNC: {rsVectorCounts.SYNC} ({((rsVectorCounts.SYNC/rsTotal)*100).toFixed(0)}%)</span>
+                <span className="text-blue-400">D_LEAD: {rsVectorCounts.D_LEAD} ({((rsVectorCounts.D_LEAD/rsTotal)*100).toFixed(0)}%)</span>
+                <span className="text-cyan-400">M_LEAD: {rsVectorCounts.M_LEAD} ({((rsVectorCounts.M_LEAD/rsTotal)*100).toFixed(0)}%)</span>
+                <span className="text-red-400">WEAK: {rsVectorCounts.WEAK} ({((rsVectorCounts.WEAK/rsTotal)*100).toFixed(0)}%)</span>
+                <span className="text-zinc-400">NEUT: {rsVectorCounts.NEUT} ({((rsVectorCounts.NEUT/rsTotal)*100).toFixed(0)}%)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* QUALITYTIER */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <h4 className="text-sm font-bold text-zinc-200 mb-3">QUALITYTIER ({totalStocks} STOCKS)</h4>
+            <div className="space-y-2">
+              <div className="flex h-8 rounded overflow-hidden">
+                {counts.prime > 0 && (
+                  <div 
+                    className="bg-green-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(counts.prime / totalStocks) * 100}%` }}
+                  >
+                    {counts.prime > totalStocks * MIN_CHART_LABEL_THRESHOLD && `PRIME: ${counts.prime}`}
+                  </div>
+                )}
+                {counts.valid > 0 && (
+                  <div 
+                    className="bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(counts.valid / totalStocks) * 100}%` }}
+                  >
+                    {counts.valid > totalStocks * MIN_CHART_LABEL_THRESHOLD && `VALID: ${counts.valid}`}
+                  </div>
+                )}
+                {counts.watch > 0 && (
+                  <div 
+                    className="bg-amber-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(counts.watch / totalStocks) * 100}%` }}
+                  >
+                    {counts.watch > totalStocks * MIN_CHART_LABEL_THRESHOLD && `WATCH: ${counts.watch}`}
+                  </div>
+                )}
+                {counts.avoid > 0 && (
+                  <div 
+                    className="bg-red-500 flex items-center justify-center text-[10px] font-bold text-white px-1"
+                    style={{ width: `${(counts.avoid / totalStocks) * 100}%` }}
+                  >
+                    {counts.avoid > totalStocks * MIN_CHART_LABEL_THRESHOLD && `AVOID: ${counts.avoid}`}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="text-green-400">PRIME: {counts.prime} ({((counts.prime/totalStocks)*100).toFixed(0)}%)</span>
+                <span className="text-blue-400">VALID: {counts.valid} ({((counts.valid/totalStocks)*100).toFixed(0)}%)</span>
+                <span className="text-amber-400">WATCH: {counts.watch} ({((counts.watch/totalStocks)*100).toFixed(0)}%)</span>
+                <span className="text-red-400">AVOID: {counts.avoid} ({((counts.avoid/totalStocks)*100).toFixed(0)}%)</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -725,7 +943,12 @@ export function StockAnalysis() {
 
           {/* ========= MARKET REGIME TAB ========= */}
           <TabsContent value="regime" className="space-y-4">
-            <MarketRegimePanel regime={data.regime} />
+            <MarketRegimePanel 
+              regime={data.regime} 
+              counts={data.counts}
+              totalStocks={data.totalStocks}
+              rsStocks={data.rsStocks}
+            />
           </TabsContent>
 
           {/* ========= TO TAB ========= */}

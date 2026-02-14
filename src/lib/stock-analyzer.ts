@@ -56,6 +56,8 @@ export interface IndexOverview {
   bqs: number; // base quality score
   rqs: number; // retest quality score
   volX: number; // volume ratio
+  close?: number; // optional: closing price
+  changePct?: number; // optional: percentage change
 }
 
 export interface BreadthIndex {
