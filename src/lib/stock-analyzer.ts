@@ -401,11 +401,6 @@ function calcState(data: StockOHLCV[]): { state: State; volRatio: number; rqs: n
   if (bbWidth < 0.10 && c > m50 * 0.93) {
     return { state: "BASE", volRatio, rqs };
   }
-  // Extended BASE: above MA200 even if not tight
-  if (c > m200 && c > m50 * 0.95) {
-    return { state: "BASE", volRatio, rqs };
-  }
-
   return { state: "WEAK", volRatio, rqs };
 }
 
