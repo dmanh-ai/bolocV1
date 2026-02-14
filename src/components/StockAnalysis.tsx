@@ -91,6 +91,7 @@ const VECTOR_COLORS: Record<RSVector, string> = {
   SYNC: 'bg-green-500 text-white',
   D_LEAD: 'bg-blue-500 text-white',
   M_LEAD: 'bg-cyan-600 text-white',
+  WEAK: 'bg-red-600 text-white',
   NEUT: 'bg-zinc-600 text-zinc-300',
 };
 
@@ -476,24 +477,24 @@ const ACTION_GUIDES: Record<RegimeState, { title: string; bullets: string[] }> =
   },
 };
 
-function MarketRegimePanel({ regime, counts, totalStocks, rsStocks }: { 
-  regime: MarketRegime; 
-  counts: AnalysisResult['counts'];
-  totalStocks: number;
-  rsStocks: RSStock[];
+function MarketRegimePanel({ regime, distribution }: {
+  regime: MarketRegime;
+  distribution: AnalysisResult['distribution'];
 }) {
   const actionGuide = ACTION_GUIDES[regime.regime] || ACTION_GUIDES.NEUTRAL;
-  
-  // Calculate RS Vector distribution
-  // Note: WEAK is approximated as NEUT stocks that are not active
+
+  // Use distribution data from ALL analyzed stocks (universe)
+  const { qtier: qtierDist, rsVector: rsDist } = distribution;
   const rsVectorCounts = {
-    SYNC: rsStocks.filter(s => s.vector === 'SYNC').length,
-    D_LEAD: rsStocks.filter(s => s.vector === 'D_LEAD').length,
-    M_LEAD: rsStocks.filter(s => s.vector === 'M_LEAD').length,
-    WEAK: rsStocks.filter(s => s.vector === 'NEUT' && !s.isActive).length,
-    NEUT: rsStocks.filter(s => s.vector === 'NEUT').length,
+    SYNC: rsDist.sync,
+    D_LEAD: rsDist.dLead,
+    M_LEAD: rsDist.mLead,
+    WEAK: rsDist.weak,
+    NEUT: rsDist.neut,
   };
-  const rsTotal = rsStocks.length;
+  const rsTotal = rsDist.total;
+  const totalStocks = qtierDist.total;
+  const counts = { prime: qtierDist.prime, valid: qtierDist.valid, watch: qtierDist.watch, avoid: qtierDist.avoid };
 
   // Determine regime text color
   const regimeTextColor = REGIME_TEXT[regime.regime] || 'text-zinc-400';
@@ -881,7 +882,7 @@ export function StockAnalysis() {
             Stock Setups V5.3
           </h1>
           <p className="text-sm text-zinc-500">
-            Technical Oscillator + Relative Strength | Top 500 vốn hoá
+            Technical Oscillator + Relative Strength | All Stocks
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -943,33 +944,35 @@ export function StockAnalysis() {
 
           {/* ========= MARKET REGIME TAB ========= */}
           <TabsContent value="regime" className="space-y-4">
-            <MarketRegimePanel 
-              regime={data.regime} 
-              counts={data.counts}
-              totalStocks={data.totalStocks}
-              rsStocks={data.rsStocks}
+            <MarketRegimePanel
+              regime={data.regime}
+              distribution={data.distribution}
             />
           </TabsContent>
 
           {/* ========= TO TAB ========= */}
           <TabsContent value="to" className="space-y-4">
+            {/* Header info */}
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-zinc-200">Tổ hợp TO chất lượng cao</span>
+                <span className="text-xs text-zinc-500 ml-2">| TK ≥ 10 tỷ</span>
+              </div>
+              <span className="text-xs text-zinc-400 font-mono">{data.totalStocks} mã / {data.totalUniverse} universe</span>
+            </div>
+
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
               <StatCard label="Total" value={data.totalStocks} />
               <StatCard label="PRIME" value={data.counts.prime} color="text-green-400" />
               <StatCard label="VALID" value={data.counts.valid} color="text-blue-400" />
-              <StatCard label="WATCH" value={data.counts.watch} color="text-zinc-400" />
-              <StatCard label="AVOID" value={data.counts.avoid} color="text-red-400" />
+              <StatCard label="Tier 1A" value={data.counts.tier1a} color="text-green-400" />
+              <StatCard label="Tier 2A" value={data.counts.tier2a} color="text-blue-400" />
               <StatCard
                 label="Setups"
                 value={TO_TIERS.reduce((sum, t) => sum + (data.toTiers[t.key]?.length || 0), 0)}
                 color="text-amber-400"
               />
-            </div>
-
-            {/* Distribution Summary */}
-            <div className="text-xs text-zinc-400 space-y-1">
-              <div>QualityTier Distribution ({data.totalStocks} stocks): {data.totalStocks > 0 ? `PRIME ${data.counts.prime} (${((data.counts.prime/data.totalStocks)*100).toFixed(1)}%), VALID ${data.counts.valid} (${((data.counts.valid/data.totalStocks)*100).toFixed(1)}%), WATCH ${data.counts.watch} (${((data.counts.watch/data.totalStocks)*100).toFixed(1)}%), AVOID ${data.counts.avoid} (${((data.counts.avoid/data.totalStocks)*100).toFixed(1)}%)` : 'No data'}</div>
             </div>
 
             {/* Tier Sections */}
@@ -989,6 +992,15 @@ export function StockAnalysis() {
 
           {/* ========= RS TAB ========= */}
           <TabsContent value="rs" className="space-y-4">
+            {/* Header info */}
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-zinc-200">Tổ hợp RS chất lượng cao</span>
+                <span className="text-xs text-zinc-500 ml-2">| TK ≥ 10 tỷ</span>
+              </div>
+              <span className="text-xs text-zinc-400 font-mono">{data.rsStocks.length} mã / {data.totalUniverse} universe</span>
+            </div>
+
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               <StatCard label="Total" value={data.rsStocks.length} />
@@ -996,11 +1008,6 @@ export function StockAnalysis() {
               <StatCard label="SYNC" value={data.counts.sync} color="text-green-400" />
               <StatCard label="D_LEAD" value={data.counts.dLead} color="text-blue-400" />
               <StatCard label="M_LEAD" value={data.counts.mLead} color="text-cyan-400" />
-            </div>
-
-            {/* RS Vector Distribution Summary */}
-            <div className="text-xs text-zinc-400 space-y-1">
-              <div>RS Vector Distribution ({data.rsStocks.length} stocks): {data.rsStocks.length > 0 ? `SYNC ${data.counts.sync} (${((data.counts.sync/data.rsStocks.length)*100).toFixed(1)}%), D_LEAD ${data.counts.dLead} (${((data.counts.dLead/data.rsStocks.length)*100).toFixed(1)}%), M_LEAD ${data.counts.mLead} (${((data.counts.mLead/data.rsStocks.length)*100).toFixed(1)}%), NEUT ${data.counts.neut} (${((data.counts.neut/data.rsStocks.length)*100).toFixed(1)}%), WEAK ${data.counts.weak} (${((data.counts.weak/data.rsStocks.length)*100).toFixed(1)}%)` : 'No data'}</div>
             </div>
 
             {/* Category Sections */}

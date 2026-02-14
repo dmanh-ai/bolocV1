@@ -33,7 +33,7 @@ export type MTFSync = "SYNC" | "PARTIAL" | "WEAK";
 export type QTier = "PRIME" | "VALID" | "WATCH" | "AVOID";
 export type MIPhase = "PEAK" | "HIGH" | "MID" | "LOW";
 export type RSState = "Leading" | "Improving" | "Neutral" | "Weakening" | "Declining";
-export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "NEUT";
+export type RSVector = "SYNC" | "D_LEAD" | "M_LEAD" | "WEAK" | "NEUT";
 export type RSBucket = "PRIME" | "ELITE" | "CORE" | "QUALITY" | "WEAK";
 
 export type RegimeState = "BULL" | "NEUTRAL" | "BEAR" | "BLOCKED";
@@ -213,7 +213,8 @@ export interface RSCategoryConfig {
 }
 
 export interface AnalysisResult {
-  totalStocks: number;
+  totalStocks: number;      // filtered stocks (GTGD >= 10B)
+  totalUniverse: number;    // all analyzed stocks
   toStocks: TOStock[];
   rsStocks: RSStock[];
   toTiers: Record<TOTier, TOStock[]>;
@@ -231,6 +232,10 @@ export interface AnalysisResult {
     mLead: number;
     weak: number;
     neut: number;
+  };
+  distribution: {
+    qtier: { total: number; prime: number; valid: number; watch: number; avoid: number };
+    rsVector: { total: number; sync: number; dLead: number; mLead: number; weak: number; neut: number };
   };
   regime: MarketRegime;
   generatedAt: string;
@@ -616,9 +621,10 @@ function calcRS(
 
   let vector: RSVector;
   if (rs20 > 0 && rs50 > 0 && rs200 > 0) vector = "SYNC";
-  else if (rs20 > 2) vector = "D_LEAD";
-  else if (rs200 > 2) vector = "M_LEAD";
-  else vector = "NEUT";
+  else if (rs20 > 0 && rs50 > 0) vector = "D_LEAD";
+  else if (rs200 > 0) vector = "M_LEAD";
+  else if (rsPct > -2 && rs20 > -2) vector = "NEUT";
+  else vector = "WEAK";
 
   let score = 50;
   score += Math.min(20, Math.max(-20, rsPct * 2));
@@ -1419,10 +1425,10 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
   const toAnalyze = universe;
 
   // Step 5: Batch fetch price histories
-  const toStocks: TOStock[] = [];
-  const rsStocks: RSStock[] = [];
+  const allTOStocks: TOStock[] = [];
+  const allRSStocks: RSStock[] = [];
 
-  const batchSize = 15;
+  const batchSize = 50;
   for (let i = 0; i < toAnalyze.length; i += batchSize) {
     const batch = toAnalyze.slice(i, i + batchSize);
     const results = await Promise.all(
@@ -1484,13 +1490,37 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
     );
     results.forEach((r) => {
       if (r) {
-        toStocks.push(r.toStock);
-        rsStocks.push(r.rsStock);
+        allTOStocks.push(r.toStock);
+        allRSStocks.push(r.rsStock);
       }
     });
   }
 
-  // Step 6: Sort and categorize
+  // Step 6: Distribution stats (from ALL analyzed stocks)
+  const totalAnalyzed = allTOStocks.length;
+  const distribution = {
+    qtier: {
+      total: totalAnalyzed,
+      prime: allTOStocks.filter((s) => s.qtier === "PRIME").length,
+      valid: allTOStocks.filter((s) => s.qtier === "VALID").length,
+      watch: allTOStocks.filter((s) => s.qtier === "WATCH").length,
+      avoid: allTOStocks.filter((s) => s.qtier === "AVOID").length,
+    },
+    rsVector: {
+      total: allRSStocks.length,
+      sync: allRSStocks.filter((s) => s.vector === "SYNC").length,
+      dLead: allRSStocks.filter((s) => s.vector === "D_LEAD").length,
+      mLead: allRSStocks.filter((s) => s.vector === "M_LEAD").length,
+      weak: allRSStocks.filter((s) => s.vector === "WEAK").length,
+      neut: allRSStocks.filter((s) => s.vector === "NEUT").length,
+    },
+  };
+
+  // Step 7: Filter for display — GTGD >= 10 tỷ (liquid stocks)
+  const toStocks = allTOStocks.filter((s) => s.gtgd >= 10);
+  const rsStocks = allRSStocks.filter((s) => s.gtgd >= 10);
+
+  // Step 8: Sort and categorize filtered stocks
   toStocks.sort((a, b) => b.rank - a.rank);
   rsStocks.sort((a, b) => b.score - a.score);
 
@@ -1504,14 +1534,14 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
     rsCats[cat.key] = rsStocks.filter(cat.filter);
   }
 
-  // Calculate remaining regime layers
-  const momentumLayer = calcMomentumLayer(toStocks);
+  // Step 9: Build regime (use ALL stocks for momentum layer)
+  const momentumLayer = calcMomentumLayer(allTOStocks);
   const flowLayer = calcFlowLayer(flowRaw);
   const layer4Output = calcLayer4Output(layer1Ceiling, layer2Components, layer3Breadth, indices);
   const regime = buildRegime(
-    indexLayer, 
-    breadthLayer, 
-    momentumLayer, 
+    indexLayer,
+    breadthLayer,
+    momentumLayer,
     flowLayer,
     layer1Ceiling,
     layer2Components,
@@ -1522,6 +1552,7 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
 
   return {
     totalStocks: toStocks.length,
+    totalUniverse: totalAnalyzed,
     toStocks,
     rsStocks,
     toTiers,
@@ -1537,9 +1568,10 @@ export async function runFullAnalysis(topN = 9999): Promise<AnalysisResult> {
       sync: rsStocks.filter((s) => s.vector === "SYNC").length,
       dLead: rsStocks.filter((s) => s.vector === "D_LEAD").length,
       mLead: rsStocks.filter((s) => s.vector === "M_LEAD").length,
-      weak: rsStocks.filter((s) => s.bucket === "WEAK").length,
+      weak: rsStocks.filter((s) => s.vector === "WEAK").length,
       neut: rsStocks.filter((s) => s.vector === "NEUT").length,
     },
+    distribution,
     regime,
     generatedAt: new Date().toISOString(),
   };
