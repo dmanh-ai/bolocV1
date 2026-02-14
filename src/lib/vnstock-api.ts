@@ -97,14 +97,15 @@ export interface StockListItem {
  * This file contains the complete list of all stocks in the vnstock repository.
  * Falls back to an empty array if the file cannot be fetched.
  * 
- * @returns Array of symbol strings
+ * @returns Array of symbol strings (normalized to uppercase)
  */
 async function fetchAllSymbols(): Promise<string[]> {
   try {
     const data = await fetchCSV("metadata/symbols_by_industry.csv");
     const symbols = data
       .map((row) => row.symbol)
-      .filter((s) => s && s.trim().length > 0);
+      .filter((s) => s && s.trim().length > 0)
+      .map((s) => s.toUpperCase()); // Normalize to uppercase for consistent lookups
     return [...new Set(symbols)]; // Remove duplicates
   } catch (error) {
     console.error("Failed to fetch symbol list from metadata:", error);
@@ -144,10 +145,10 @@ export async function getStockList(): Promise<StockListItem[]> {
     // If we have symbols from metadata, use them as the base
     if (allSymbols.length > 0) {
       return allSymbols.map((symbol) => {
-        const trading = tradingMap.get(symbol.toUpperCase());
+        const trading = tradingMap.get(symbol); // Symbol already uppercase from fetchAllSymbols
         return {
           symbol: symbol,
-          exchange: trading?.exchange || "",
+          exchange: trading?.exchange || "", // Empty string indicates no trading data available
           close_price: num(trading?.close_price) ?? 0,
           price_change: num(trading?.price_change) ?? 0,
           price_change_pct: num(trading?.price_change_pct) ?? 0,
