@@ -234,68 +234,114 @@ async function fetchFinancialCSV(url: string, signal?: AbortSignal): Promise<str
   }
 }
 
-// ===== TCBS API Fallback =====
-const TCBS_BASE = 'https://apipubaws.tcbs.com.vn/tcanalysis/v1';
+// ===== VCI + KBS API Fallback (replaces deprecated TCBS API) =====
+const VCI_GRAPHQL_URL = 'https://trading.vietcap.com.vn/data-mt/graphql';
+const KBS_INSIDER_URL = 'https://kbbuddywts.kbsec.com.vn/iis-server/investment/stockinfo/news/internal-trading';
 
+// Try fetch directly, then via CORS proxies if blocked
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchTCBS(symbol: string, type: string, signal?: AbortSignal): Promise<any> {
-  const sym = symbol.toUpperCase();
-  let url: string;
-  switch (type) {
-    case 'shareholders': url = `${TCBS_BASE}/company/${sym}/large-share-holders`; break;
-    case 'news': url = `${TCBS_BASE}/ticker/${sym}/activity-news?page=0&size=15`; break;
-    case 'insider': url = `${TCBS_BASE}/company/${sym}/insider-dealing?page=0&size=20`; break;
-    default: return null;
-  }
+async function fetchWithCorsRetry(url: string, options?: RequestInit & { signal?: AbortSignal }): Promise<any> {
+  // Try direct first
   try {
-    const res = await fetch(url, { signal });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+    const res = await fetch(url, options);
+    if (res.ok) return await res.json();
+  } catch { /* CORS or network error, try proxies */ }
+  // Fallback: CORS proxies (GET only — for POST, skip proxies)
+  if (options?.method === 'POST') return null;
+  const proxies = [
+    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  ];
+  for (const makeProxy of proxies) {
+    try {
+      const res = await fetch(makeProxy(url), { signal: options?.signal });
+      if (res.ok) return await res.json();
+    } catch { /* try next proxy */ }
   }
+  return null;
 }
 
-function parseTCBSShareholders(data: unknown): ShareholderItem[] {
+// Fetch shareholders + news from VCI GraphQL API
+async function fetchVCICompanyData(symbol: string, signal?: AbortSignal): Promise<{ shareholders: ShareholderItem[]; news: CompanyNewsItem[] }> {
+  const query = `query Q($ticker:String!,$lang:String!){OrganizationShareHolders(ticker:$ticker){ownerFullName quantity percentage updateDate}News(ticker:$ticker,langCode:$lang){newsTitle newsShortContent publicDate newsSourceLink}}`;
+  const variables = { ticker: symbol.toUpperCase(), lang: 'vi' };
+
+  // Try POST first (direct)
+  let data = null;
+  try {
+    const res = await fetch(VCI_GRAPHQL_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+      signal,
+    });
+    if (res.ok) {
+      const json = await res.json();
+      data = json?.data;
+    }
+  } catch { /* CORS blocked, try GET via proxy */ }
+
+  // Fallback: GraphQL over GET via CORS proxy
+  if (!data) {
+    const getUrl = `${VCI_GRAPHQL_URL}?query=${encodeURIComponent(query)}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
+    const proxies = [
+      (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    ];
+    for (const makeProxy of proxies) {
+      try {
+        const res = await fetch(makeProxy(getUrl), { signal });
+        if (res.ok) {
+          const json = await res.json();
+          data = json?.data;
+          if (data) break;
+        }
+      } catch { /* try next */ }
+    }
+  }
+
+  if (!data) return { shareholders: [], news: [] };
+
+  // Parse shareholders
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const d = data as any;
-  const list = d?.listShareHolder || d?.listMajorShareHolder || [];
+  const shList = (data.OrganizationShareHolders || []) as any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return list.map((s: any) => ({
-    name: s.name || s.shareHolderName || '',
-    sharesOwned: (s.no || s.quantity) ? parseInt(s.no || s.quantity).toLocaleString('vi-VN') : '',
-    ownershipPct: s.ownPercent != null ? `${(s.ownPercent * 100).toFixed(2)}%` : '',
-    updateDate: '',
+  const shareholders: ShareholderItem[] = shList.map((s: any) => ({
+    name: s.ownerFullName || '',
+    sharesOwned: s.quantity ? parseInt(s.quantity).toLocaleString('vi-VN') : '',
+    ownershipPct: s.percentage != null ? `${(s.percentage * 100).toFixed(2)}%` : '',
+    updateDate: s.updateDate ? new Date(s.updateDate).toLocaleDateString('vi-VN') : '',
   })).filter((s: ShareholderItem) => s.name);
-}
 
-function parseTCBSNews(data: unknown): CompanyNewsItem[] {
+  // Parse news
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const d = data as any;
-  const list = d?.listActivityNews || [];
+  const nList = (data.News || []) as any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return list.slice(0, 10).map((n: any) => ({
-    title: n.title || '',
-    shortContent: n.content?.slice(0, 200) || '',
-    publicDate: n.publishDate ? new Date(n.publishDate).toLocaleDateString('vi-VN') : '',
-    sourceLink: n.source || '',
+  const news: CompanyNewsItem[] = nList.slice(0, 10).map((n: any) => ({
+    title: n.newsTitle || '',
+    shortContent: (n.newsShortContent || '').slice(0, 200),
+    publicDate: n.publicDate ? new Date(n.publicDate).toLocaleDateString('vi-VN') : '',
+    sourceLink: n.newsSourceLink || '',
   })).filter((n: CompanyNewsItem) => n.title);
+
+  return { shareholders, news };
 }
 
-function parseTCBSInsider(data: unknown): InsiderTradeItem[] {
+// Fetch insider trading from KBS API
+async function fetchKBSInsider(symbol: string, signal?: AbortSignal): Promise<InsiderTradeItem[]> {
+  const url = `${KBS_INSIDER_URL}/${symbol.toUpperCase()}?l=1&p=1&s=20`;
+  const data = await fetchWithCorsRetry(url, { signal });
+  if (!Array.isArray(data)) return [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const d = data as any;
-  const list = d?.listInsiderDealing || [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return list.slice(0, 15).map((t: any) => ({
-    title: t.anlesName || t.dealingName || t.name || '',
-    position: t.anlesPosition || t.position || '',
-    buyVol: (t.dealingAction === 'Buy' || t.dealingAction === 'Bought') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
-    sellVol: (t.dealingAction === 'Sell' || t.dealingAction === 'Sold') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
-    volBefore: '',
-    volAfter: '',
-    dateAction: (t.anDate || t.dealingDateFrom) ? new Date(t.anDate || t.dealingDateFrom).toISOString().split('T')[0] : '',
-    status: t.dealingMethod || '',
+  return data.slice(0, 15).map((t: any) => ({
+    title: t.name || t.transactionMan || '',
+    position: t.position || t.transactionManPosition || '',
+    buyVol: (t.transactionType === 'BUY' || t.transactionType === 'Mua' || t.transactionType === '0') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
+    sellVol: (t.transactionType === 'SELL' || t.transactionType === 'Bán' || t.transactionType === '1') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
+    volBefore: t.volumeBeforeTransaction ? parseInt(t.volumeBeforeTransaction).toLocaleString('vi-VN') : '',
+    volAfter: t.volumeAfterTransaction ? parseInt(t.volumeAfterTransaction).toLocaleString('vi-VN') : '',
+    dateAction: t.transactionDate || t.orderDate || '',
+    status: t.transactionNote || '',
   })).filter((t: InsiderTradeItem) => t.title);
 }
 
@@ -1081,18 +1127,19 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
       const overview = parseOverviewCSV(overviewCSV, stock.symbol);
       const ownershipData = parseOwnershipCSV(ownershipCSV, stock.symbol);
 
-      // Fallback to TCBS API if CSV has no data for this stock
-      const needsTCBS = news.length === 0 || shareholders.length === 0;
-      if (needsTCBS) {
-        const tcbsFetches = await Promise.all([
-          news.length === 0 ? fetchTCBS(stock.symbol, 'news', controller.signal) : null,
-          shareholders.length === 0 ? fetchTCBS(stock.symbol, 'shareholders', controller.signal) : null,
-          insiderTrades.length === 0 ? fetchTCBS(stock.symbol, 'insider', controller.signal) : null,
+      // Fallback to VCI + KBS APIs if CSV has no data for this stock
+      const needsApiFallback = news.length === 0 || shareholders.length === 0;
+      if (needsApiFallback) {
+        const [vciData, kbsInsider] = await Promise.all([
+          (news.length === 0 || shareholders.length === 0) ? fetchVCICompanyData(stock.symbol, controller.signal) : Promise.resolve(null),
+          insiderTrades.length === 0 ? fetchKBSInsider(stock.symbol, controller.signal) : Promise.resolve([]),
         ]);
 
-        if (tcbsFetches[0]) news = parseTCBSNews(tcbsFetches[0]);
-        if (tcbsFetches[1]) shareholders = parseTCBSShareholders(tcbsFetches[1]);
-        if (tcbsFetches[2]) insiderTrades = parseTCBSInsider(tcbsFetches[2]);
+        if (vciData) {
+          if (news.length === 0 && vciData.news.length > 0) news = vciData.news;
+          if (shareholders.length === 0 && vciData.shareholders.length > 0) shareholders = vciData.shareholders;
+        }
+        if (insiderTrades.length === 0 && kbsInsider.length > 0) insiderTrades = kbsInsider;
       }
 
       setCompanyExtra({
