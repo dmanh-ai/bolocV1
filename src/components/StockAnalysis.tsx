@@ -726,17 +726,57 @@ interface CompanyExtraData {
 }
 
 // ===== Parse Company CSVs =====
+
+// Robust CSV parser: handles quoted fields, multi-line values, escaped quotes
+function parseFullCSV(csv: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuote = false;
+  let i = 0;
+  while (i < csv.length) {
+    const ch = csv[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (csv[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuote = false;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+    } else {
+      if (ch === '"' && field.length === 0) { inQuote = true; i++; continue; }
+      if (ch === ',') { row.push(field); field = ''; i++; continue; }
+      if (ch === '\n' || ch === '\r') {
+        row.push(field);
+        field = '';
+        if (ch === '\r' && csv[i + 1] === '\n') i++;
+        if (row.some(f => f.length > 0)) rows.push(row);
+        row = [];
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+    }
+  }
+  row.push(field);
+  if (row.some(f => f.length > 0)) rows.push(row);
+  return rows;
+}
+
 function parseCompanyCSVBySymbol(csv: string, symbol: string): Record<string, string>[] {
   if (!csv) return [];
-  const lines = csv.trim().split('\n');
-  if (lines.length < 2) return [];
-  const headerLine = lines[0].replace(/^\uFEFF/, '');
-  const headers = headerLine.split(',').map(h => h.trim());
+  const cleaned = csv.replace(/^\uFEFF/, '');
+  const allRows = parseFullCSV(cleaned);
+  if (allRows.length < 2) return [];
+  const headers = allRows[0].map(h => h.trim());
   const symIdx = headers.findIndex(h => h === 'symbol');
   if (symIdx === -1) return [];
   const results: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const vals = lines[i].split(',');
+  for (let i = 1; i < allRows.length; i++) {
+    const vals = allRows[i];
     if (vals[symIdx]?.trim() === symbol) {
       const rec: Record<string, string> = {};
       headers.forEach((h, j) => { rec[h] = vals[j]?.trim() ?? ''; });
@@ -836,7 +876,8 @@ function parseOverviewCSV(csv: string, symbol: string): CompanyOverviewData | nu
   };
 }
 
-const LOCKED_OWNER_TYPES = ['CĐ Nhà nước', 'CĐ lớn trong nước', 'CĐ lớn', 'CĐ sáng lập', 'Cổ phiếu quỹ'];
+// Keywords indicating locked (non-freefloat) ownership - normalize whitespace before matching
+const LOCKED_KEYWORDS = ['Nhà nước', 'sáng lập', 'phiếu quỹ', 'trên 5%', '>= 5%', 'CĐ lớn'];
 
 function parseOwnershipCSV(csv: string, symbol: string): { items: OwnershipItem[]; freefloatPct: number | null } {
   const rows = parseCompanyCSVBySymbol(csv, symbol);
@@ -847,53 +888,33 @@ function parseOwnershipCSV(csv: string, symbol: string): { items: OwnershipItem[
     sharesOwned: r['shares_owned'] ? parseInt(r['shares_owned']).toLocaleString('vi-VN') : '',
   })).filter(o => o.ownerType);
 
-  // Calculate freefloat: 100% - locked ownership (state + major + founders + treasury)
+  // Calculate freefloat: 100% - locked ownership
+  // Only show freefloat if we can identify at least one locked category
   let lockedPct = 0;
+  let hasLocked = false;
   for (const item of items) {
-    if (LOCKED_OWNER_TYPES.some(t => item.ownerType.includes(t))) {
+    const norm = item.ownerType.replace(/\s+/g, ' ');
+    if (LOCKED_KEYWORDS.some(k => norm.includes(k))) {
       lockedPct += item.ownershipPct;
+      hasLocked = true;
     }
   }
-  const freefloatPct = items.length > 0 ? Math.max(0, 100 - lockedPct) : null;
+  const freefloatPct = hasLocked ? Math.max(0, 100 - lockedPct) : null;
   return { items, freefloatPct };
-}
-
-function parseCSVRow(line: string): string[] {
-  const fields: string[] = [];
-  let i = 0;
-  while (i < line.length) {
-    if (line[i] === '"') {
-      let val = '';
-      i++;
-      while (i < line.length) {
-        if (line[i] === '"' && line[i + 1] === '"') { val += '"'; i += 2; }
-        else if (line[i] === '"') { i++; break; }
-        else { val += line[i]; i++; }
-      }
-      fields.push(val);
-      if (line[i] === ',') i++;
-    } else {
-      const next = line.indexOf(',', i);
-      if (next === -1) { fields.push(line.slice(i)); break; }
-      fields.push(line.slice(i, next));
-      i = next + 1;
-    }
-  }
-  return fields;
 }
 
 function parseCompanyNameMap(csv: string): Record<string, string> {
   if (!csv) return {};
-  const lines = csv.trim().split('\n');
-  if (lines.length < 2) return {};
-  const headerLine = lines[0].replace(/^\uFEFF/, '');
-  const headers = parseCSVRow(headerLine).map(h => h.trim());
+  const cleaned = csv.replace(/^\uFEFF/, '');
+  const allRows = parseFullCSV(cleaned);
+  if (allRows.length < 2) return {};
+  const headers = allRows[0].map(h => h.trim());
   const symIdx = headers.findIndex(h => h === 'symbol');
   const profIdx = headers.findIndex(h => h === 'company_profile');
   if (symIdx === -1 || profIdx === -1) return {};
   const map: Record<string, string> = {};
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCSVRow(lines[i]);
+  for (let i = 1; i < allRows.length; i++) {
+    const vals = allRows[i];
     const sym = vals[symIdx]?.trim();
     if (!sym || map[sym]) continue;
     const profile = (vals[profIdx] || '').trim();
