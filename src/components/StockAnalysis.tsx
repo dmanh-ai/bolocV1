@@ -1100,31 +1100,66 @@ function RSTable({ stocks, onStockClick }: { stocks: RSStock[]; onStockClick?: (
 
 // ==================== COLLAPSIBLE SECTION ====================
 
-function TierSection({ name, description, count, color, defaultOpen, children }: {
+// Tier explanations
+const TIER_EXPLANATIONS: Record<string, string> = {
+  tier1a: 'Nhóm entry TỐI ƯU nhất. Cổ phiếu phải đạt cả 3 điều kiện: QTier = PRIME (chất lượng cao nhất), State = RETEST hoặc CONFIRM (điểm entry an toàn), MTF = SYNC (tất cả khung thời gian đồng thuận tăng). Đây là nhóm có xác suất thành công cao nhất — ưu tiên giải ngân trong BULL regime.',
+  tier2a: 'Nhóm entry ĐƯỢC PHÉP. QTier ≥ VALID + State = RETEST/CONFIRM + MTF ≠ WEAK. Chất lượng tốt nhưng không hoàn hảo như Tier 1A (có thể MTF chỉ PARTIAL hoặc QTier = VALID). Vẫn đáng mua nhưng nên giảm size so với Tier 1A.',
+  s_major_trend: 'Cổ phiếu đang trong xu hướng tăng MẠNH NHẤT (S_MAJOR = giá > MA20 > MA50 > MA200). State = TREND nghĩa là đang chạy, không phải điểm entry mới. MI HIGH/PEAK = momentum vẫn khỏe. Chiến lược: GIỮ vị thế đang có, trailing stop, KHÔNG mua đuổi ở đây.',
+  fresh_breakout: 'Cổ phiếu VỪA phá vỡ vùng kháng cự/tích lũy. Điều kiện: State = BREAKOUT + QTier ≥ VALID + Volume Ratio ≥ 1.5x (khối lượng xác nhận breakout). Cơ hội mua nhanh nhưng rủi ro cao hơn Tier 1A/2A vì chưa được xác nhận. Cần stop-loss chặt.',
+  quality_retest: 'Pullback chất lượng CAO. Cổ phiếu S_MAJOR (trend mạnh nhất) đang quay về test hỗ trợ (RETEST) với RQS ≥ 60 (chất lượng retest tốt). Đây là cơ hội "mua giá tốt" trong uptrend mạnh. Nếu giữ hỗ trợ → entry đẹp.',
+  pipeline: 'Nhóm THEO DÕI — cổ phiếu đang tích lũy (BASE) với chất lượng tốt (QTier ≥ VALID) và momentum đang hồi phục (MI ≥ MID). Chưa có tín hiệu entry rõ ràng. Theo dõi để bắt khi breakout hoặc chuyển sang CONFIRM/RETEST.',
+};
+
+const RS_CAT_EXPLANATIONS: Record<string, string> = {
+  sync_active: 'RS SYNC + ACTIVE — Cổ phiếu mạnh hơn VN-Index trên CẢ 3 khung thời gian (Daily, Weekly, Monthly) + đang active (thanh khoản tốt). Nhóm MẠNH NHẤT về sức mạnh tương đối. Ưu tiên mua trong BULL regime.',
+  d_lead_active: 'RS D_LEAD + ACTIVE — Daily RS dẫn đầu, Monthly RS chưa hoàn toàn. Có thể là cổ phiếu đang BẮT ĐẦU chu kỳ outperform mới. Theo dõi để xem có chuyển sang SYNC không.',
+  m_lead_active: 'RS M_LEAD + ACTIVE — Monthly RS vẫn mạnh, Daily RS đang nghỉ/điều chỉnh. Cổ phiếu có nền tảng RS dài hạn tốt nhưng ngắn hạn đang yếu đi. Có thể là cơ hội mua pullback nếu Daily RS hồi phục.',
+  probe_watch: 'Nhóm THEO DÕI — RS chưa đủ mạnh hoặc chưa active. Có thể đang hình thành RS mới. Không ưu tiên mua nhưng theo dõi để bắt sớm khi RS cải thiện.',
+};
+
+function TierSection({ name, description, count, color, defaultOpen, children, tierKey }: {
   name: string;
   description: string;
   count: number;
   color: string;
   defaultOpen?: boolean;
   children: React.ReactNode;
+  tierKey?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen ?? count > 0);
+  const [showExpl, setShowExpl] = useState(false);
+  const explanation = tierKey ? (TIER_EXPLANATIONS[tierKey] || RS_CAT_EXPLANATIONS[tierKey]) : undefined;
 
   return (
     <div className={`rounded-lg border border-zinc-800 overflow-hidden ${color} border-l-4`}>
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-zinc-800/30 transition-colors"
-      >
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-4 py-3 hover:bg-zinc-800/30 transition-colors">
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-3 flex-1 text-left"
+        >
           {open ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />}
           <span className="font-bold text-sm text-zinc-100">{name}</span>
           <span className="text-xs text-zinc-500">{description}</span>
+        </button>
+        <div className="flex items-center gap-2">
+          {explanation && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowExpl(s => !s); }}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${showExpl ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'}`}
+            >
+              ?
+            </button>
+          )}
+          <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 text-xs font-mono">
+            {count}
+          </Badge>
         </div>
-        <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 text-xs font-mono">
-          {count}
-        </Badge>
-      </button>
+      </div>
+      {showExpl && explanation && (
+        <div className="mx-4 mb-2 px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/50 text-xs leading-relaxed text-zinc-400">
+          {explanation}
+        </div>
+      )}
       {open && (
         <div className="px-2 pb-2">
           {children}
@@ -1136,11 +1171,21 @@ function TierSection({ name, description, count, color, defaultOpen, children }:
 
 // ==================== SUMMARY STATS ====================
 
-function StatCard({ label, value, color }: { label: string; value: number | string; color?: string }) {
+function StatCard({ label, value, color, hint }: { label: string; value: number | string; color?: string; hint?: string }) {
+  const [showHint, setShowHint] = useState(false);
   return (
-    <div className="flex flex-col items-center p-3 rounded-lg bg-zinc-900 border border-zinc-800">
-      <span className="text-[11px] text-zinc-500 uppercase tracking-wider">{label}</span>
+    <div
+      className={`flex flex-col items-center p-3 rounded-lg bg-zinc-900 border border-zinc-800 ${hint ? 'cursor-pointer hover:bg-zinc-800/60' : ''} transition-colors`}
+      onClick={() => hint && setShowHint(h => !h)}
+    >
+      <span className="text-[11px] text-zinc-500 uppercase tracking-wider flex items-center gap-1">
+        {label}
+        {hint && <span className="text-zinc-700 text-[9px]">?</span>}
+      </span>
       <span className={`text-xl font-bold font-mono ${color || 'text-zinc-100'}`}>{value}</span>
+      {showHint && hint && (
+        <p className="mt-1.5 text-[10px] leading-snug text-zinc-500 text-center">{hint}</p>
+      )}
     </div>
   );
 }
@@ -1262,6 +1307,54 @@ const ACTION_GUIDES: Record<RegimeState, { title: string; bullets: string[] }> =
   },
 };
 
+// Top banner with expandable regime explanation
+function RegimeBanner({ regime, allocation, scoreMultiplier, regimeTextColor }: {
+  regime: RegimeState; allocation: string; scoreMultiplier: number; regimeTextColor: string;
+}) {
+  const [showExpl, setShowExpl] = useState(false);
+  const expl = REGIME_EXPLANATION.values[regime];
+  return (
+    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
+      <div className="flex items-center justify-between">
+        <button className="text-left" onClick={() => setShowExpl(s => !s)}>
+          <span className={`text-3xl font-black ${regimeTextColor}`}>{regime}</span>
+          <span className="ml-2 text-zinc-700 text-xs">bấm để xem giải thích</span>
+        </button>
+        <div className="text-right">
+          <div className="text-lg font-bold text-zinc-100">Stop: {allocation}</div>
+          <div className="text-sm text-zinc-400">{regime} × {scoreMultiplier.toFixed(2)} | {allocation}</div>
+        </div>
+      </div>
+      {showExpl && expl && (
+        <div className="mt-3 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/40 text-xs leading-relaxed text-zinc-400">
+          <span className={`font-bold ${regimeTextColor}`}>{regime}</span>: {expl}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Clickable section title with expandable explanation for regime panel
+function SectionTitle({ title, hint }: { title: string; hint: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="mb-3">
+      <button
+        className="flex items-center gap-2 text-lg font-bold text-zinc-100 hover:text-amber-400 transition-colors"
+        onClick={() => setShow(s => !s)}
+      >
+        {title}
+        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors ${show ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-600 hover:text-zinc-400'}`}>?</span>
+      </button>
+      {show && (
+        <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 bg-zinc-800/40 rounded-lg px-3 py-2 border border-zinc-700/40">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function MarketRegimePanel({ regime, distribution }: {
   regime: MarketRegime;
   distribution: AnalysisResult['distribution'];
@@ -1288,17 +1381,7 @@ function MarketRegimePanel({ regime, distribution }: {
   return (
     <div className="space-y-4">
       {/* Section 1: Top Banner */}
-      <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className={`text-3xl font-black ${regimeTextColor}`}>{regime.regime}</span>
-          </div>
-          <div className="text-right">
-            <div className="text-lg font-bold text-zinc-100">Stop: {regime.allocation}</div>
-            <div className="text-sm text-zinc-400">{regime.regime} × {scoreMultiplier.toFixed(2)} | {regime.allocation}</div>
-          </div>
-        </div>
-      </div>
+      <RegimeBanner regime={regime.regime} allocation={regime.allocation} scoreMultiplier={scoreMultiplier} regimeTextColor={regimeTextColor} />
 
       {/* Section 2: Current Regime Box */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
@@ -1351,7 +1434,10 @@ function MarketRegimePanel({ regime, distribution }: {
 
       {/* Section 4: 4-LAYER FRAMEWORK */}
       <div>
-        <h3 className="text-lg font-bold text-zinc-100 mb-3">4-LAYER FRAMEWORK</h3>
+        <SectionTitle
+          title="4-LAYER FRAMEWORK"
+          hint="Hệ thống 4 lớp đánh giá sức khỏe thị trường. Layer 1 (Ceiling): VN-Index có bị chặn không? Layer 2 (Components): VN30/VNMID đang rotation hay đồng thuận? Layer 3 (Breadth): % cổ phiếu trên EMA50, xác định quadrant Bull/Bear. Layer 4 (Output): Tổng hợp → quyết định Regime (BULL/NEUTRAL/BEAR/BLOCKED) và mức phân bổ vốn."
+        />
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Card 1 - LAYER 1 */}
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
@@ -1431,7 +1517,10 @@ function MarketRegimePanel({ regime, distribution }: {
 
       {/* Section 5: INDEX OVERVIEW — LAYER 1 CEILING */}
       <div>
-        <h3 className="text-lg font-bold text-zinc-100 mb-3">INDEX OVERVIEW — LAYER 1 CEILING</h3>
+        <SectionTitle
+          title="INDEX OVERVIEW — LAYER 1 CEILING"
+          hint="Tổng quan các chỉ số chính (VN-Index, VN30, VNMID, VN100). Mỗi index hiển thị: giá, state (trạng thái kỹ thuật), MI (momentum), TrendPath, BQS (breakout quality), RQS (retest quality), VolX (volume ratio). Nếu VN-Index ở trạng thái WEAK/EXIT → ceiling bị phá, regime sẽ chuyển BEAR/BLOCKED."
+        />
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {regime.indices.map((index) => {
             const price = index.close || regime.indexLayer?.vnindex || 0;
@@ -1467,7 +1556,10 @@ function MarketRegimePanel({ regime, distribution }: {
 
       {/* Section 6: BREADTH ANALYSIS — LAYER 3 QUADRANT */}
       <div>
-        <h3 className="text-lg font-bold text-zinc-100 mb-3">BREADTH ANALYSIS — LAYER 3 QUADRANT</h3>
+        <SectionTitle
+          title="BREADTH ANALYSIS — LAYER 3 QUADRANT"
+          hint="Phân tích độ rộng thị trường — đo bao nhiêu % cổ phiếu trên EMA50. Quadrant: Q1 (Bull) = %EMA50 cao + slope dương, Q2 (Weak Bull) = %EMA50 cao nhưng slope âm (đang suy yếu), Q3 (Bear) = %EMA50 thấp + slope âm, Q4 (Weak Bear) = %EMA50 thấp nhưng slope dương (đang hồi phục). Slope 5d/10d cho biết tốc độ thay đổi, Accel cho biết xu hướng đang tăng tốc hay chậm lại."
+        />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {[
             { name: 'VN30', breadthData: regime.layer3Breadth.vn30Breadth, isAll: false },
@@ -1520,7 +1612,10 @@ function MarketRegimePanel({ regime, distribution }: {
 
       {/* Section 7: DISTRIBUTION SUMMARY */}
       <div>
-        <h3 className="text-lg font-bold text-zinc-100 mb-3">DISTRIBUTION SUMMARY</h3>
+        <SectionTitle
+          title="DISTRIBUTION SUMMARY"
+          hint="Phân bổ cổ phiếu theo RS Vector và QualityTier. RS Vector: SYNC (3 TF outperform) nhiều = thị trường khỏe, WEAK nhiều = thị trường yếu. QualityTier: PRIME+VALID nhiều = nhiều cơ hội chất lượng, WATCH+AVOID nhiều = ít cơ hội. So sánh tỷ lệ này qua thời gian để đánh giá thị trường đang cải thiện hay xấu đi."
+        />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* RS VECTOR */}
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
@@ -2747,15 +2842,16 @@ export function StockAnalysis() {
 
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              <StatCard label="Total" value={data.totalStocks} />
-              <StatCard label="PRIME" value={data.counts.prime} color="text-green-400" />
-              <StatCard label="VALID" value={data.counts.valid} color="text-blue-400" />
-              <StatCard label="Tier 1A" value={data.counts.tier1a} color="text-green-400" />
-              <StatCard label="Tier 2A" value={data.counts.tier2a} color="text-blue-400" />
+              <StatCard label="Total" value={data.totalStocks} hint="Tổng số cổ phiếu được phân tích trong universe (đã lọc thanh khoản)." />
+              <StatCard label="PRIME" value={data.counts.prime} color="text-green-400" hint="QTier = PRIME — chất lượng cao nhất: trend mạnh, MTF sync, momentum tốt. Nhóm ưu tiên mua." />
+              <StatCard label="VALID" value={data.counts.valid} color="text-blue-400" hint="QTier = VALID — đạt hầu hết tiêu chí chất lượng. Có thể mua khi có tín hiệu entry tốt." />
+              <StatCard label="Tier 1A" value={data.counts.tier1a} color="text-green-400" hint="Entry TỐI ƯU: PRIME + RETEST/CONFIRM + MTF SYNC. Xác suất thành công cao nhất." />
+              <StatCard label="Tier 2A" value={data.counts.tier2a} color="text-blue-400" hint="Entry ĐƯỢC PHÉP: VALID+ + Entry State + MTF≠WEAK. Tốt nhưng nên giảm size so với Tier 1A." />
               <StatCard
                 label="Setups"
                 value={TO_TIERS.reduce((sum, t) => sum + (data.toTiers[t.key]?.length || 0), 0)}
                 color="text-amber-400"
+                hint="Tổng số cổ phiếu có setup đáng chú ý (tất cả tier cộng lại: 1A + 2A + S_MAJOR + Breakout + Retest + Pipeline)."
               />
             </div>
 
@@ -2763,6 +2859,7 @@ export function StockAnalysis() {
             {TO_TIERS.map((tier) => (
               <TierSection
                 key={tier.key}
+                tierKey={tier.key}
                 name={tier.name}
                 description={tier.description}
                 count={data.toTiers[tier.key]?.length || 0}
@@ -2778,17 +2875,18 @@ export function StockAnalysis() {
           <TabsContent value="rs" className="space-y-4">
             {/* Summary Stats */}
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-              <StatCard label="Total" value={data.rsStocks.length} />
-              <StatCard label="ACTIVE" value={data.counts.active} color="text-green-400" />
-              <StatCard label="SYNC" value={data.counts.sync} color="text-green-400" />
-              <StatCard label="D_LEAD" value={data.counts.dLead} color="text-blue-400" />
-              <StatCard label="M_LEAD" value={data.counts.mLead} color="text-cyan-400" />
+              <StatCard label="Total" value={data.rsStocks.length} hint="Tổng số cổ phiếu được phân tích RS (Relative Strength) so với VN-Index." />
+              <StatCard label="ACTIVE" value={data.counts.active} color="text-green-400" hint="Cổ phiếu đang active — thanh khoản đủ lớn và RS đang có tín hiệu rõ ràng. Chỉ nên mua cổ phiếu ACTIVE." />
+              <StatCard label="SYNC" value={data.counts.sync} color="text-green-400" hint="RS SYNC — mạnh hơn VN-Index trên cả 3 khung (D/W/M). Nhóm mạnh nhất, ưu tiên mua." />
+              <StatCard label="D_LEAD" value={data.counts.dLead} color="text-blue-400" hint="RS D_LEAD — Daily RS dẫn, có thể đang bắt đầu chu kỳ outperform mới. Theo dõi chuyển SYNC." />
+              <StatCard label="M_LEAD" value={data.counts.mLead} color="text-cyan-400" hint="RS M_LEAD — Monthly RS mạnh, Daily đang nghỉ. Nền tảng RS tốt, chờ Daily hồi phục." />
             </div>
 
             {/* Category Sections */}
             {RS_CATEGORIES.map((cat) => (
               <TierSection
                 key={cat.key}
+                tierKey={cat.key}
                 name={cat.name}
                 description={cat.description}
                 count={data.rsCats[cat.key]?.length || 0}
