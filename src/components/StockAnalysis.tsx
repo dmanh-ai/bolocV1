@@ -224,14 +224,6 @@ Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không p
 
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/dmanh-ai/vnstock/main/data';
 
-interface FinancialData {
-  incomeStatement: string;
-  balanceSheet: string;
-  cashFlow: string;
-  ratios: string;
-  ratiosExtra: string;
-}
-
 async function fetchFinancialCSV(url: string, signal?: AbortSignal): Promise<string> {
   try {
     const res = await fetch(url, { signal });
@@ -361,6 +353,132 @@ async function fetchStockFinancials(symbol: string, signal?: AbortSignal): Promi
   return summary;
 }
 
+// Parse CSV into structured table data for display
+interface TableData {
+  headers: string[];
+  rows: { label: string; values: string[] }[];
+}
+
+function parseCSVToTable(csv: string, maxCols?: number): TableData | null {
+  if (!csv) return null;
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return null;
+
+  const header = lines[0].split(',');
+  const headers = header.slice(2, maxCols ? 2 + maxCols : undefined);
+  const rows: TableData['rows'] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i];
+    const parts: string[] = [];
+    let inQuote = false;
+    let current = '';
+    for (const ch of row) {
+      if (ch === '"') { inQuote = !inQuote; continue; }
+      if (ch === ',' && !inQuote) { parts.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    parts.push(current.trim());
+
+    const label = parts[1] || parts[0] || '';
+    if (!label) continue;
+    const values = parts.slice(2, maxCols ? 2 + maxCols : undefined).map(v => {
+      const n = parseFloat(v);
+      if (isNaN(n)) return v || '-';
+      if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    rows.push({ label, values });
+  }
+  return rows.length > 0 ? { headers, rows } : null;
+}
+
+function parseRatiosExtraToTable(csv: string): TableData | null {
+  if (!csv) return null;
+  const lines = csv.trim().split('\n');
+  if (lines.length < 3) return null;
+
+  const colNames = lines[1].split(',');
+  const dataRows = lines.slice(2)
+    .map(line => line.split(','))
+    .filter(parts => parts[2]?.trim() === '5')
+    .slice(-4);
+
+  if (dataRows.length === 0) return null;
+
+  const headers = dataRows.map(r => r[1]?.trim() || '?');
+  const keyMetrics = [
+    [4, 'Debt/Equity'], [7, 'Asset Turnover'], [9, 'Days Sales Outstanding'],
+    [10, 'Days Inventory Outstanding'], [12, 'Cash Cycle'], [14, 'EBIT Margin (%)'],
+    [15, 'Gross Profit Margin (%)'], [16, 'Net Profit Margin (%)'],
+    [17, 'ROE (%)'], [18, 'ROIC (%)'], [19, 'ROA (%)'],
+    [23, 'Current Ratio'], [26, 'Interest Coverage'],
+    [28, 'Market Cap (Bn VND)'], [30, 'P/E'], [31, 'P/B'], [32, 'P/S'],
+    [34, 'EPS (VND)'], [35, 'BVPS (VND)'], [36, 'EV/EBITDA'],
+  ] as const;
+
+  const rows: TableData['rows'] = [];
+  for (const [idx, label] of keyMetrics) {
+    if (idx >= colNames.length) continue;
+    const values = dataRows.map(r => {
+      const v = r[idx]?.trim();
+      if (!v || v === '') return '-';
+      const n = parseFloat(v);
+      if (isNaN(n)) return v;
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    rows.push({ label, values });
+  }
+  return rows.length > 0 ? { headers, rows } : null;
+}
+
+// Collapsible data section component
+function DataSection({ title, children, defaultOpen = false }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mb-2">
+      <button
+        className="flex items-center gap-1.5 w-full text-left px-2 py-1.5 rounded-lg hover:bg-zinc-800/50 transition-colors text-sm font-semibold text-zinc-300"
+        onClick={() => setOpen(o => !o)}
+      >
+        {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        {title}
+      </button>
+      {open && <div className="mt-1">{children}</div>}
+    </div>
+  );
+}
+
+// Mini table component for financial data
+function FinTable({ data }: { data: TableData }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-zinc-800">
+            <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chỉ tiêu</th>
+            {data.headers.map((h, i) => (
+              <th key={i} className="px-2 py-1 text-right text-zinc-500 font-normal whitespace-nowrap">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, i) => (
+            <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+              <td className="px-2 py-1 text-zinc-400 max-w-[200px] truncate" title={row.label}>{row.label}</td>
+              {row.values.map((v, j) => (
+                <td key={j} className="px-2 py-1 text-right font-mono text-zinc-300 whitespace-nowrap">{v}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 interface StockAIModalProps {
   stock: TOStock | RSStock | null;
   stockType: 'TO' | 'RS';
@@ -368,22 +486,83 @@ interface StockAIModalProps {
   onClose: () => void;
 }
 
+interface FinancialTables {
+  income: TableData | null;
+  balance: TableData | null;
+  cashflow: TableData | null;
+  ratio: TableData | null;
+  extra: TableData | null;
+}
+
 function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) {
   const [analysis, setAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [financials, setFinancials] = useState<FinancialTables | null>(null);
+  const [finLoading, setFinLoading] = useState(false);
+  const [finTextCache, setFinTextCache] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll as content streams
+  // Auto-scroll as content streams (only during AI analysis)
   useEffect(() => {
-    if (contentRef.current) {
+    if (contentRef.current && isLoading) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
-  }, [analysis]);
+  }, [analysis, isLoading]);
 
-  // Auto-analyze on open
+  // Auto-fetch financial data on open
   useEffect(() => {
+    if (!stock) return;
+    const controller = new AbortController();
+
+    const loadFinancials = async () => {
+      setFinLoading(true);
+      const urls = {
+        income: `${GITHUB_RAW_BASE}/financials/${stock.symbol}/income_statement_year.csv`,
+        balance: `${GITHUB_RAW_BASE}/financials/${stock.symbol}/balance_sheet_year.csv`,
+        cashflow: `${GITHUB_RAW_BASE}/financials/${stock.symbol}/cash_flow_year.csv`,
+        ratio: `${GITHUB_RAW_BASE}/financials/${stock.symbol}/ratio_year.csv`,
+        extra: `${GITHUB_RAW_BASE}/financials_extra/ratios_detail/${stock.symbol}.csv`,
+      };
+
+      const [incomeCSV, balanceCSV, cashflowCSV, ratioCSV, extraCSV] = await Promise.all([
+        fetchFinancialCSV(urls.income, controller.signal),
+        fetchFinancialCSV(urls.balance, controller.signal),
+        fetchFinancialCSV(urls.cashflow, controller.signal),
+        fetchFinancialCSV(urls.ratio, controller.signal),
+        fetchFinancialCSV(urls.extra, controller.signal),
+      ]);
+
+      setFinancials({
+        income: parseCSVToTable(incomeCSV, 4),
+        balance: parseCSVToTable(balanceCSV, 4),
+        cashflow: parseCSVToTable(cashflowCSV, 4),
+        ratio: parseCSVToTable(ratioCSV, 4),
+        extra: parseRatiosExtraToTable(extraCSV),
+      });
+
+      // Cache text summary for AI
+      let summary = '';
+      if (incomeCSV || balanceCSV || cashflowCSV || ratioCSV || extraCSV) {
+        summary += `\n\n========== PHÂN TÍCH CƠ BẢN ==========\n`;
+      }
+      summary += parseCSVToSummary(incomeCSV, 'BÁO CÁO KẾT QUẢ KINH DOANH (NĂM)', 4);
+      summary += parseCSVToSummary(ratioCSV, 'TỶ SỐ TÀI CHÍNH (NĂM)', 4);
+      summary += parseCSVToSummary(balanceCSV, 'BẢNG CÂN ĐỐI KẾ TOÁN (NĂM)', 4);
+      summary += parseCSVToSummary(cashflowCSV, 'BÁO CÁO LƯU CHUYỂN TIỀN TỆ (NĂM)', 4);
+      summary += parseRatiosExtraToSummary(extraCSV);
+      setFinTextCache(summary || '\n(Không tìm thấy dữ liệu tài chính cho mã này)\n');
+
+      setFinLoading(false);
+    };
+
+    loadFinancials();
+    return () => controller.abort();
+  }, [stock]);
+
+  // AI analysis — triggered by button
+  const runAnalysis = useCallback(async () => {
     if (!stock) return;
     const apiKey = localStorage.getItem('anthropic_api_key');
     if (!apiKey) {
@@ -391,113 +570,109 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
       return;
     }
 
-    const analyze = async () => {
-      setIsLoading(true);
-      setError(null);
-      setAnalysis('');
+    setIsLoading(true);
+    setError(null);
+    setAnalysis('');
 
-      const controller = new AbortController();
-      abortRef.current = controller;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      try {
-        let info = `=== PHÂN TÍCH CỔ PHIẾU: ${stock.symbol} ===\n`;
-        info += `Giá hiện tại: ${(stock.price * 1000).toLocaleString('vi-VN')} VNĐ\n`;
-        info += `Thay đổi hôm nay: ${stock.changePct >= 0 ? '+' : ''}${stock.changePct.toFixed(2)}%\n`;
-        info += `GTGD (thanh khoản): ${stock.gtgd} tỷ\n`;
+    try {
+      let info = `=== PHÂN TÍCH CỔ PHIẾU: ${stock.symbol} ===\n`;
+      info += `Giá hiện tại: ${(stock.price * 1000).toLocaleString('vi-VN')} VNĐ\n`;
+      info += `Thay đổi hôm nay: ${stock.changePct >= 0 ? '+' : ''}${stock.changePct.toFixed(2)}%\n`;
+      info += `GTGD (thanh khoản): ${stock.gtgd} tỷ\n`;
 
-        if (stockType === 'TO') {
-          const s = stock as TOStock;
-          info += `\n--- CHỈ SỐ KỸ THUẬT (TO) ---\n`;
-          info += `State: ${s.state}\n`;
-          info += `Trend Path: ${s.tpaths}\n`;
-          info += `MTF Sync: ${s.mtf}\n`;
-          info += `QTier: ${s.qtier}\n`;
-          info += `MI Phase: ${s.miph}\n`;
-          info += `MI (Momentum): ${s.mi}\n`;
-          info += `Rank: ${s.rank}\n`;
-          info += `Vol Ratio: ${s.volRatio?.toFixed(2) ?? 'N/A'}\n`;
-          info += `RQS (Retest Quality): ${s.rqs?.toFixed(1) ?? 'N/A'}\n`;
-        } else {
-          const s = stock as RSStock;
-          info += `\n--- CHỈ SỐ RS (Relative Strength) ---\n`;
-          info += `RS State: ${s.rsState}\n`;
-          info += `Vector: ${s.vector}\n`;
-          info += `Bucket: ${s.bucket}\n`;
-          info += `RS%: ${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%\n`;
-          info += `Score: ${s.score}\n`;
-        }
+      if (stockType === 'TO') {
+        const s = stock as TOStock;
+        info += `\n--- CHỈ SỐ KỸ THUẬT (TO) ---\n`;
+        info += `State: ${s.state}\n`;
+        info += `Trend Path: ${s.tpaths}\n`;
+        info += `MTF Sync: ${s.mtf}\n`;
+        info += `QTier: ${s.qtier}\n`;
+        info += `MI Phase: ${s.miph}\n`;
+        info += `MI (Momentum): ${s.mi}\n`;
+        info += `Rank: ${s.rank}\n`;
+        info += `Vol Ratio: ${s.volRatio?.toFixed(2) ?? 'N/A'}\n`;
+        info += `RQS (Retest Quality): ${s.rqs?.toFixed(1) ?? 'N/A'}\n`;
+      } else {
+        const s = stock as RSStock;
+        info += `\n--- CHỈ SỐ RS (Relative Strength) ---\n`;
+        info += `RS State: ${s.rsState}\n`;
+        info += `Vector: ${s.vector}\n`;
+        info += `Bucket: ${s.bucket}\n`;
+        info += `RS%: ${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%\n`;
+        info += `Score: ${s.score}\n`;
+      }
 
-        info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
-        info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+      info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
+      info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+      info += finTextCache;
 
-        // Fetch fundamental data from GitHub
-        const financialSummary = await fetchStockFinancials(stock.symbol, controller.signal);
-        info += financialSummary;
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          stream: true,
+          system: STOCK_AI_PROMPT,
+          messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
+        }),
+        signal: controller.signal,
+      });
 
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 4096,
-            stream: true,
-            system: STOCK_AI_PROMPT,
-            messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
-          }),
-          signal: controller.signal,
-        });
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
+      }
 
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
-        }
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      let buf = '';
 
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let text = '';
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const jsonStr = line.slice(6).trim();
-              if (!jsonStr || jsonStr === '[DONE]') continue;
-              try {
-                const event = JSON.parse(jsonStr);
-                if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                  text += event.delta.text;
-                  setAnalysis(text);
-                }
-              } catch { /* ignore */ }
-            }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                text += event.delta.text;
+                setAnalysis(text);
+              }
+            } catch { /* ignore */ }
           }
         }
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        setError(err instanceof Error ? err.message : 'Lỗi không xác định');
-      } finally {
-        setIsLoading(false);
       }
-    };
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setError(err instanceof Error ? err.message : 'Lỗi không xác định');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [stock, stockType, regime, finTextCache]);
 
-    analyze();
-
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, [stock, stockType, regime]);
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   if (!stock) return null;
+
+  const hasFinancials = financials && (financials.income || financials.balance || financials.cashflow || financials.ratio || financials.extra);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -505,14 +680,14 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       {/* Modal */}
       <div
-        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <Sparkles className="w-5 h-5 text-amber-400" />
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20">
+              <BarChart3 className="w-5 h-5 text-blue-400" />
             </div>
             <div>
               <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
@@ -522,25 +697,115 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
                 </span>
               </h3>
               <p className="text-xs text-zinc-500">
-                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`} | Kỹ thuật + Cơ bản
+                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={runAnalysis}
+              disabled={isLoading || finLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isLoading ? (
+                <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang phân tích...</>
+              ) : (
+                <><Sparkles className="w-3.5 h-3.5" /> AI Phân tích</>
+              )}
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
-        <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4">
+        <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
           {error && (
             <div className="rounded-lg border border-red-800 bg-red-900/20 p-3 mb-3">
               <p className="text-sm text-red-400">{error}</p>
             </div>
           )}
 
-          {analysis ? (
-            <div>
+          {/* Technical Data */}
+          <DataSection title={stockType === 'TO' ? 'Chỉ số kỹ thuật (TO)' : 'Chỉ số RS'} defaultOpen={true}>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 px-2 text-xs">
+              {stockType === 'TO' ? (() => {
+                const s = stock as TOStock;
+                return <>
+                  <div className="flex justify-between"><span className="text-zinc-500">State</span><span className="text-zinc-200 font-medium">{s.state}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Trend Path</span><span className="text-zinc-200 font-medium">{s.tpaths}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">MTF Sync</span><span className="text-zinc-200 font-medium">{s.mtf}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">QTier</span><span className="text-zinc-200 font-medium">{s.qtier}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">MI Phase</span><span className="text-zinc-200 font-medium">{s.miph}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">MI</span><span className="text-zinc-200 font-medium">{s.mi}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Rank</span><span className="text-zinc-200 font-medium">{s.rank}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Vol Ratio</span><span className="text-zinc-200 font-medium">{s.volRatio?.toFixed(2) ?? 'N/A'}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">RQS</span><span className="text-zinc-200 font-medium">{s.rqs?.toFixed(1) ?? 'N/A'}</span></div>
+                </>;
+              })() : (() => {
+                const s = stock as RSStock;
+                return <>
+                  <div className="flex justify-between"><span className="text-zinc-500">RS State</span><span className="text-zinc-200 font-medium">{s.rsState}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Vector</span><span className="text-zinc-200 font-medium">{s.vector}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Bucket</span><span className="text-zinc-200 font-medium">{s.bucket}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">RS%</span><span className="text-zinc-200 font-medium">{s.rsPct >= 0 ? '+' : ''}{s.rsPct.toFixed(1)}%</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Score</span><span className="text-zinc-200 font-medium">{s.score}</span></div>
+                </>;
+              })()}
+              <div className="flex justify-between"><span className="text-zinc-500">Regime</span><span className="text-zinc-200 font-medium">{regime.regime}</span></div>
+            </div>
+          </DataSection>
+
+          {/* Financial Data */}
+          {finLoading && (
+            <div className="flex items-center gap-2 px-2 py-3 text-xs text-zinc-500">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              Đang tải dữ liệu tài chính...
+            </div>
+          )}
+
+          {hasFinancials && (
+            <>
+              {financials.ratio && (
+                <DataSection title="Tỷ số tài chính" defaultOpen={true}>
+                  <FinTable data={financials.ratio} />
+                </DataSection>
+              )}
+              {financials.income && (
+                <DataSection title="Báo cáo kết quả kinh doanh">
+                  <FinTable data={financials.income} />
+                </DataSection>
+              )}
+              {financials.balance && (
+                <DataSection title="Bảng cân đối kế toán">
+                  <FinTable data={financials.balance} />
+                </DataSection>
+              )}
+              {financials.cashflow && (
+                <DataSection title="Báo cáo lưu chuyển tiền tệ">
+                  <FinTable data={financials.cashflow} />
+                </DataSection>
+              )}
+              {financials.extra && (
+                <DataSection title="Chỉ số mở rộng (ROIC, Cash Cycle...)">
+                  <FinTable data={financials.extra} />
+                </DataSection>
+              )}
+            </>
+          )}
+
+          {!finLoading && !hasFinancials && (
+            <div className="px-2 py-2 text-xs text-zinc-600 italic">Không tìm thấy dữ liệu tài chính cho mã này</div>
+          )}
+
+          {/* AI Analysis */}
+          {analysis && (
+            <div className="mt-3 pt-3 border-t border-zinc-800">
+              <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-amber-400">
+                <Sparkles className="w-4 h-4" />
+                AI Phân tích
+              </div>
               <SimpleMarkdown text={analysis} />
               {isLoading && (
                 <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
@@ -549,17 +814,18 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
                 </div>
               )}
             </div>
-          ) : isLoading ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mb-4" />
-              <p className="text-sm text-zinc-400">AI đang phân tích <strong className="text-zinc-200">{stock.symbol}</strong>...</p>
+          )}
+
+          {!analysis && !isLoading && !error && (
+            <div className="text-center py-4 text-xs text-zinc-600">
+              Xem dữ liệu phía trên, sau đó bấm <strong className="text-amber-400">AI Phân tích</strong> để nhận phân tích toàn diện
             </div>
-          ) : null}
+          )}
         </div>
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-600 text-center">
-          Phân tích bởi Claude AI — Chỉ mang tính tham khảo, không phải khuyến nghị đầu tư
+          Dữ liệu tài chính từ vnstock — Phân tích bởi Claude AI — Chỉ mang tính tham khảo
         </div>
       </div>
     </div>
