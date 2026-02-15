@@ -20,9 +20,10 @@ import {
   Briefcase,
   Plus,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import {
   runFullAnalysis,
   TO_TIERS,
@@ -201,9 +202,225 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
   );
 }
 
+// ==================== STOCK AI DETAIL MODAL ====================
+
+const STOCK_AI_PROMPT = `Bạn là chuyên gia phân tích kỹ thuật chứng khoán Việt Nam. Nhiệm vụ: phân tích CHI TIẾT 1 mã cổ phiếu dựa trên dữ liệu kỹ thuật được cung cấp.
+
+Yêu cầu output (BẮT BUỘC theo thứ tự):
+1. **TỔNG QUAN** — Mã đang ở trạng thái gì, xu hướng ra sao (2-3 câu)
+2. **PHÂN TÍCH KỸ THUẬT** — State, Trend Path, MTF, QTier, MI Phase, Momentum — giải thích ý nghĩa từng chỉ số
+3. **VÙNG GIÁ QUAN TRỌNG** — Hỗ trợ, kháng cự, vùng mua lý tưởng
+4. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do cụ thể
+5. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
+6. **RỦI RO** — Các yếu tố cần lưu ý
+
+Phong cách: ngắn gọn, bullet points, HÀNH ĐỘNG cụ thể. Viết bằng tiếng Việt.
+Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không phải khuyến nghị đầu tư chính thức."`;
+
+interface StockAIModalProps {
+  stock: TOStock | RSStock | null;
+  stockType: 'TO' | 'RS';
+  regime: MarketRegime;
+  onClose: () => void;
+}
+
+function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) {
+  const [analysis, setAnalysis] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll as content streams
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [analysis]);
+
+  // Auto-analyze on open
+  useEffect(() => {
+    if (!stock) return;
+    const apiKey = localStorage.getItem('anthropic_api_key');
+    if (!apiKey) {
+      setError('Chưa có API Key. Vui lòng nhập ở tab "AI Khuyến nghị" trước.');
+      return;
+    }
+
+    const analyze = async () => {
+      setIsLoading(true);
+      setError(null);
+      setAnalysis('');
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        let info = `=== PHÂN TÍCH CỔ PHIẾU: ${stock.symbol} ===\n`;
+        info += `Giá hiện tại: ${(stock.price * 1000).toLocaleString('vi-VN')} VNĐ\n`;
+        info += `Thay đổi hôm nay: ${stock.changePct >= 0 ? '+' : ''}${stock.changePct.toFixed(2)}%\n`;
+        info += `GTGD (thanh khoản): ${stock.gtgd} tỷ\n`;
+
+        if (stockType === 'TO') {
+          const s = stock as TOStock;
+          info += `\n--- CHỈ SỐ KỸ THUẬT (TO) ---\n`;
+          info += `State: ${s.state}\n`;
+          info += `Trend Path: ${s.tpaths}\n`;
+          info += `MTF Sync: ${s.mtf}\n`;
+          info += `QTier: ${s.qtier}\n`;
+          info += `MI Phase: ${s.miph}\n`;
+          info += `MI (Momentum): ${s.mi}\n`;
+          info += `Rank: ${s.rank}\n`;
+          info += `Vol Ratio: ${s.volRatio?.toFixed(2) ?? 'N/A'}\n`;
+          info += `RQS (Retest Quality): ${s.rqs?.toFixed(1) ?? 'N/A'}\n`;
+        } else {
+          const s = stock as RSStock;
+          info += `\n--- CHỈ SỐ RS (Relative Strength) ---\n`;
+          info += `RS State: ${s.rsState}\n`;
+          info += `Vector: ${s.vector}\n`;
+          info += `Bucket: ${s.bucket}\n`;
+          info += `RS%: ${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%\n`;
+          info += `Score: ${s.score}\n`;
+        }
+
+        info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
+        info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5-20250929',
+            max_tokens: 2048,
+            stream: true,
+            system: STOCK_AI_PROMPT,
+            messages: [{ role: 'user', content: `Phân tích chi tiết mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let text = '';
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr || jsonStr === '[DONE]') continue;
+              try {
+                const event = JSON.parse(jsonStr);
+                if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                  text += event.delta.text;
+                  setAnalysis(text);
+                }
+              } catch { /* ignore */ }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Lỗi không xác định');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    analyze();
+
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [stock, stockType, regime]);
+
+  if (!stock) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      {/* Modal */}
+      <div
+        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <Sparkles className="w-5 h-5 text-amber-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+                {stock.symbol}
+                <span className={`text-sm font-normal ${stock.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {stock.changePct >= 0 ? '+' : ''}{stock.changePct.toFixed(2)}%
+                </span>
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4">
+          {error && (
+            <div className="rounded-lg border border-red-800 bg-red-900/20 p-3 mb-3">
+              <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+
+          {analysis ? (
+            <div>
+              <SimpleMarkdown text={analysis} />
+              {isLoading && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Đang phân tích...
+                </div>
+              )}
+            </div>
+          ) : isLoading ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mb-4" />
+              <p className="text-sm text-zinc-400">AI đang phân tích <strong className="text-zinc-200">{stock.symbol}</strong>...</p>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-600 text-center">
+          Phân tích bởi Claude AI — Chỉ mang tính tham khảo, không phải khuyến nghị đầu tư
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== TO TABLE ====================
 
-function TOTable({ stocks }: { stocks: TOStock[] }) {
+function TOTable({ stocks, onStockClick }: { stocks: TOStock[]; onStockClick?: (s: TOStock) => void }) {
   const [sortKey, setSortKey] = useState<TOSortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -238,7 +455,7 @@ function TOTable({ stocks }: { stocks: TOStock[] }) {
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
               <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
@@ -260,7 +477,7 @@ function TOTable({ stocks }: { stocks: TOStock[] }) {
 
 // ==================== RS TABLE ====================
 
-function RSTable({ stocks }: { stocks: RSStock[] }) {
+function RSTable({ stocks, onStockClick }: { stocks: RSStock[]; onStockClick?: (s: RSStock) => void }) {
   const [sortKey, setSortKey] = useState<RSSortKey>('score');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -293,7 +510,7 @@ function RSTable({ stocks }: { stocks: RSStock[] }) {
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
               <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
@@ -1774,7 +1991,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
 
 // ==================== SCREENER TAB ====================
 
-function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RSStock[] }) {
+function ScreenerTab({ toStocks, rsStocks, onStockClick }: { toStocks: TOStock[]; rsStocks: RSStock[]; onStockClick?: (s: TOStock) => void }) {
   const [filterState, setFilterState] = useState<State | 'ALL'>('ALL');
   const [filterQTier, setFilterQTier] = useState<QTier | 'ALL'>('ALL');
   const [filterTPath, setFilterTPath] = useState<TrendPath | 'ALL'>('ALL');
@@ -1854,7 +2071,7 @@ function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RS
       </div>
 
       {/* Full stock table */}
-      <TOTable stocks={filtered} />
+      <TOTable stocks={filtered} onStockClick={onStockClick} />
     </div>
   );
 }
@@ -1868,6 +2085,13 @@ export function StockAnalysis() {
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
+
+  // Stock AI modal state
+  const [modalStock, setModalStock] = useState<TOStock | RSStock | null>(null);
+  const [modalStockType, setModalStockType] = useState<'TO' | 'RS'>('TO');
+  const openTOModal = useCallback((s: TOStock) => { setModalStock(s); setModalStockType('TO'); }, []);
+  const openRSModal = useCallback((s: RSStock) => { setModalStock(s); setModalStockType('RS'); }, []);
+  const closeModal = useCallback(() => setModalStock(null), []);
 
   return (
     <div className="space-y-5">
@@ -1981,7 +2205,7 @@ export function StockAnalysis() {
                 color={TIER_HEADER_COLORS[tier.key]}
                 defaultOpen={tier.key === 'tier1a' || tier.key === 'tier2a'}
               >
-                <TOTable stocks={data.toTiers[tier.key] || []} />
+                <TOTable stocks={data.toTiers[tier.key] || []} onStockClick={openTOModal} />
               </TierSection>
             ))}
           </TabsContent>
@@ -2007,14 +2231,14 @@ export function StockAnalysis() {
                 color={CAT_HEADER_COLORS[cat.key]}
                 defaultOpen={cat.key === 'sync_active'}
               >
-                <RSTable stocks={data.rsCats[cat.key] || []} />
+                <RSTable stocks={data.rsCats[cat.key] || []} onStockClick={openRSModal} />
               </TierSection>
             ))}
           </TabsContent>
 
           {/* ========= SCREENER TAB ========= */}
           <TabsContent value="screener" className="space-y-4">
-            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} />
+            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} onStockClick={openTOModal} />
           </TabsContent>
 
           {/* ========= PORTFOLIO TAB ========= */}
@@ -2031,6 +2255,16 @@ export function StockAnalysis() {
 
       {/* ========= GUIDE ========= */}
       <Guide />
+
+      {/* ========= STOCK AI MODAL ========= */}
+      {modalStock && data && (
+        <StockAIModal
+          stock={modalStock}
+          stockType={modalStockType}
+          regime={data.regime}
+          onClose={closeModal}
+        />
+      )}
     </div>
   );
 }
