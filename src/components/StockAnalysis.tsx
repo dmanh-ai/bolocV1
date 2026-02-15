@@ -434,6 +434,156 @@ function parseRatiosExtraToTable(csv: string): TableData | null {
   return rows.length > 0 ? { headers, rows } : null;
 }
 
+// ==================== INDICATOR EXPLANATIONS ====================
+
+const TO_EXPLANATIONS: Record<string, { desc: string; values?: Record<string, string> }> = {
+  State: {
+    desc: 'Trạng thái kỹ thuật hiện tại của cổ phiếu trên đồ thị. Cho biết cổ phiếu đang ở giai đoạn nào trong chu kỳ giá.',
+    values: {
+      BREAKOUT: 'Giá vừa phá vỡ vùng kháng cự/tích lũy — tín hiệu mua mạnh, cần xác nhận bằng khối lượng.',
+      CONFIRM: 'Breakout đã được xác nhận — xu hướng tăng rõ ràng, điểm mua an toàn hơn.',
+      RETEST: 'Giá đang quay lại test vùng breakout — cơ hội mua vào nếu giữ được hỗ trợ.',
+      TREND: 'Cổ phiếu đang trong xu hướng tăng ổn định — nắm giữ, trailing stop.',
+      BASE: 'Đang tích lũy/đi ngang — chờ tín hiệu breakout, chưa nên vào.',
+      WEAK: 'Xu hướng yếu hoặc giảm — tránh mua, cân nhắc cắt lỗ nếu đang giữ.',
+    },
+  },
+  'Trend Path': {
+    desc: 'Đánh giá sức mạnh xu hướng dựa trên cấu trúc sóng giá (đỉnh/đáy cao dần, EMA alignment).',
+    values: {
+      S_MAJOR: 'Super Major — xu hướng tăng cực mạnh, multi-timeframe đồng thuận. Top pick.',
+      MAJOR: 'Major — xu hướng tăng mạnh và rõ ràng, đáng tin cậy.',
+      MINOR: 'Minor — xu hướng tăng nhẹ hoặc đang hình thành, cần thêm xác nhận.',
+      WEAK: 'Weak — không có xu hướng rõ hoặc đang giảm.',
+    },
+  },
+  'MTF Sync': {
+    desc: 'Multi-TimeFrame Sync — mức độ đồng thuận xu hướng giữa các khung thời gian (ngày, tuần, tháng).',
+    values: {
+      SYNC: 'Tất cả khung thời gian đồng thuận tăng — tín hiệu mạnh nhất, xác suất thành công cao.',
+      PARTIAL: 'Một số khung đồng thuận — cần chọn lọc, có thể có divergence.',
+      WEAK: 'Các khung mâu thuẫn nhau — rủi ro cao, nên đứng ngoài.',
+    },
+  },
+  QTier: {
+    desc: 'Quality Tier — xếp hạng chất lượng tổng hợp dựa trên state, trend, MTF, momentum.',
+    values: {
+      PRIME: 'Chất lượng cao nhất — đầy đủ tiêu chí: trend mạnh, MTF sync, momentum tốt.',
+      VALID: 'Chất lượng tốt — đạt hầu hết tiêu chí, có thể cân nhắc mua.',
+      WATCH: 'Theo dõi — chưa đủ điều kiện, cần chờ thêm tín hiệu.',
+      AVOID: 'Tránh — không đạt tiêu chí, rủi ro cao.',
+    },
+  },
+  'MI Phase': {
+    desc: 'Momentum Index Phase — giai đoạn momentum hiện tại, cho biết sức đẩy giá đang ở đâu.',
+    values: {
+      PEAK: 'Momentum đỉnh — giá tăng mạnh nhưng có thể sắp chậm lại. Cẩn thận đuổi giá.',
+      HIGH: 'Momentum cao — sức đẩy tốt, xu hướng đang khỏe.',
+      MID: 'Momentum trung bình — đang hồi phục hoặc bắt đầu suy yếu.',
+      LOW: 'Momentum thấp — sức đẩy yếu, giá có thể đi ngang hoặc giảm.',
+    },
+  },
+  MI: {
+    desc: 'Momentum Index (0-100) — chỉ số đo lường sức mạnh momentum. >70: mạnh, 40-70: trung bình, <40: yếu.',
+  },
+  Rank: {
+    desc: 'Điểm tổng hợp (composite score) xếp hạng cổ phiếu. Càng cao càng tốt. Tính từ state, trend, MTF, momentum, volume.',
+  },
+  'Vol Ratio': {
+    desc: 'Tỷ lệ khối lượng hiện tại so với trung bình 20 phiên. >1.5: khối lượng cao bất thường (breakout đáng tin hơn). <0.7: thanh khoản thấp.',
+  },
+  RQS: {
+    desc: 'Retest Quality Score — đánh giá chất lượng lần retest gần nhất. Điểm cao = retest sạch, giữ hỗ trợ tốt. Có ý nghĩa khi State = RETEST.',
+  },
+};
+
+const RS_EXPLANATIONS: Record<string, { desc: string; values?: Record<string, string> }> = {
+  'RS State': {
+    desc: 'Trạng thái sức mạnh tương đối (Relative Strength) so với VN-Index.',
+    values: {
+      Leading: 'Dẫn dắt thị trường — cổ phiếu mạnh hơn VN-Index rõ rệt. Top pick trong uptrend.',
+      Improving: 'Đang cải thiện — RS đang tăng, có thể sắp trở thành leader.',
+      Neutral: 'Trung lập — đi ngang so với thị trường chung.',
+      Weakening: 'Đang suy yếu — RS giảm dần, cần cẩn thận.',
+      Declining: 'Suy yếu rõ — yếu hơn thị trường, tránh mua mới.',
+    },
+  },
+  Vector: {
+    desc: 'Hướng RS trên các khung thời gian — cho biết RS đang đồng thuận hay phân kỳ giữa Daily/Monthly.',
+    values: {
+      SYNC: 'Đồng thuận tăng cả Daily & Monthly — RS mạnh nhất.',
+      D_LEAD: 'Daily dẫn — RS ngắn hạn mạnh hơn dài hạn, có thể đang bắt đầu chu kỳ mới.',
+      M_LEAD: 'Monthly dẫn — RS dài hạn vẫn mạnh, ngắn hạn đang nghỉ/điều chỉnh.',
+      WEAK: 'RS yếu trên cả hai khung — tránh.',
+      NEUT: 'Trung lập — không có tín hiệu rõ.',
+    },
+  },
+  Bucket: {
+    desc: 'Phân loại cổ phiếu theo chất lượng RS tổng hợp.',
+    values: {
+      PRIME: 'Nhóm tốt nhất — RS mạnh, vector sync, thanh khoản tốt.',
+      ELITE: 'Nhóm tinh hoa — RS rất mạnh, gần top.',
+      CORE: 'Nhóm nòng cốt — RS tốt, đáng theo dõi.',
+      QUALITY: 'Nhóm chất lượng — RS khá, có tiềm năng.',
+      WEAK: 'Nhóm yếu — RS kém, không ưu tiên.',
+    },
+  },
+  'RS%': {
+    desc: 'Phần trăm RS so với VN-Index. Dương = mạnh hơn thị trường. Âm = yếu hơn. Càng cao càng tốt.',
+  },
+  Score: {
+    desc: 'Điểm RS tổng hợp (0-100). >70: mạnh, 40-70: trung bình, <40: yếu so với thị trường.',
+  },
+};
+
+const REGIME_EXPLANATION: { desc: string; values: Record<string, string> } = {
+  desc: 'Trạng thái thị trường chung — quyết định chiến lược phân bổ vốn và mức độ tích cực.',
+  values: {
+    BULL: 'Thị trường tăng — môi trường thuận lợi, tăng tỷ trọng cổ phiếu, ưu tiên mua breakout.',
+    NEUTRAL: 'Trung lập — cân bằng, chọn lọc kỹ, giảm size.',
+    BEAR: 'Thị trường giảm — phòng thủ, giữ tiền mặt nhiều, chỉ mua khi có tín hiệu cực mạnh.',
+    BLOCKED: 'Thị trường bị chặn — tín hiệu mâu thuẫn, không rõ hướng. Tốt nhất đứng ngoài.',
+  },
+};
+
+// Clickable metric item with expandable explanation
+function MetricItem({ label, value, explanations }: {
+  label: string;
+  value: string | number;
+  explanations?: { desc: string; values?: Record<string, string> };
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const strVal = String(value);
+  const valueExpl = explanations?.values?.[strVal];
+
+  return (
+    <div className="col-span-1">
+      <button
+        className={`flex justify-between w-full text-left rounded px-1.5 py-1 transition-colors ${
+          explanations ? 'hover:bg-zinc-800/60 cursor-pointer' : 'cursor-default'
+        } ${expanded ? 'bg-zinc-800/40' : ''}`}
+        onClick={() => explanations && setExpanded(e => !e)}
+      >
+        <span className="text-zinc-500 flex items-center gap-1">
+          {label}
+          {explanations && <span className="text-zinc-700 text-[10px]">?</span>}
+        </span>
+        <span className="text-zinc-200 font-medium">{strVal}</span>
+      </button>
+      {expanded && explanations && (
+        <div className="mt-0.5 mx-1.5 mb-1 px-2 py-1.5 rounded bg-zinc-800/60 border border-zinc-700/50 text-[11px] leading-relaxed text-zinc-400">
+          <p>{explanations.desc}</p>
+          {valueExpl && (
+            <p className="mt-1 text-zinc-300 font-medium">
+              <span className="text-amber-400">{strVal}</span>: {valueExpl}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Collapsible data section component
 function DataSection({ title, children, defaultOpen = false }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -728,32 +878,32 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
           )}
 
           {/* Technical Data */}
-          <DataSection title={stockType === 'TO' ? 'Chỉ số kỹ thuật (TO)' : 'Chỉ số RS'} defaultOpen={true}>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 px-2 text-xs">
+          <DataSection title={stockType === 'TO' ? 'Chỉ số kỹ thuật (TO) — bấm chỉ số để xem giải thích' : 'Chỉ số RS — bấm chỉ số để xem giải thích'} defaultOpen={true}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 px-1 text-xs">
               {stockType === 'TO' ? (() => {
                 const s = stock as TOStock;
                 return <>
-                  <div className="flex justify-between"><span className="text-zinc-500">State</span><span className="text-zinc-200 font-medium">{s.state}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Trend Path</span><span className="text-zinc-200 font-medium">{s.tpaths}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">MTF Sync</span><span className="text-zinc-200 font-medium">{s.mtf}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">QTier</span><span className="text-zinc-200 font-medium">{s.qtier}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">MI Phase</span><span className="text-zinc-200 font-medium">{s.miph}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">MI</span><span className="text-zinc-200 font-medium">{s.mi}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Rank</span><span className="text-zinc-200 font-medium">{s.rank}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Vol Ratio</span><span className="text-zinc-200 font-medium">{s.volRatio?.toFixed(2) ?? 'N/A'}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">RQS</span><span className="text-zinc-200 font-medium">{s.rqs?.toFixed(1) ?? 'N/A'}</span></div>
+                  <MetricItem label="State" value={s.state} explanations={TO_EXPLANATIONS.State} />
+                  <MetricItem label="Trend Path" value={s.tpaths} explanations={TO_EXPLANATIONS['Trend Path']} />
+                  <MetricItem label="MTF Sync" value={s.mtf} explanations={TO_EXPLANATIONS['MTF Sync']} />
+                  <MetricItem label="QTier" value={s.qtier} explanations={TO_EXPLANATIONS.QTier} />
+                  <MetricItem label="MI Phase" value={s.miph} explanations={TO_EXPLANATIONS['MI Phase']} />
+                  <MetricItem label="MI" value={s.mi} explanations={TO_EXPLANATIONS.MI} />
+                  <MetricItem label="Rank" value={s.rank} explanations={TO_EXPLANATIONS.Rank} />
+                  <MetricItem label="Vol Ratio" value={s.volRatio?.toFixed(2) ?? 'N/A'} explanations={TO_EXPLANATIONS['Vol Ratio']} />
+                  <MetricItem label="RQS" value={s.rqs?.toFixed(1) ?? 'N/A'} explanations={TO_EXPLANATIONS.RQS} />
                 </>;
               })() : (() => {
                 const s = stock as RSStock;
                 return <>
-                  <div className="flex justify-between"><span className="text-zinc-500">RS State</span><span className="text-zinc-200 font-medium">{s.rsState}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Vector</span><span className="text-zinc-200 font-medium">{s.vector}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Bucket</span><span className="text-zinc-200 font-medium">{s.bucket}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">RS%</span><span className="text-zinc-200 font-medium">{s.rsPct >= 0 ? '+' : ''}{s.rsPct.toFixed(1)}%</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Score</span><span className="text-zinc-200 font-medium">{s.score}</span></div>
+                  <MetricItem label="RS State" value={s.rsState} explanations={RS_EXPLANATIONS['RS State']} />
+                  <MetricItem label="Vector" value={s.vector} explanations={RS_EXPLANATIONS.Vector} />
+                  <MetricItem label="Bucket" value={s.bucket} explanations={RS_EXPLANATIONS.Bucket} />
+                  <MetricItem label="RS%" value={`${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%`} explanations={RS_EXPLANATIONS['RS%']} />
+                  <MetricItem label="Score" value={s.score} explanations={RS_EXPLANATIONS.Score} />
                 </>;
               })()}
-              <div className="flex justify-between"><span className="text-zinc-500">Regime</span><span className="text-zinc-200 font-medium">{regime.regime}</span></div>
+              <MetricItem label="Regime" value={regime.regime} explanations={REGIME_EXPLANATION} />
             </div>
           </DataSection>
 
