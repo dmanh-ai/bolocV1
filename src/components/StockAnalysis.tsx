@@ -644,6 +644,187 @@ interface FinancialTables {
   extra: TableData | null;
 }
 
+// ===== Company Extra Data Interfaces =====
+interface CompanyNewsItem {
+  title: string;
+  shortContent: string;
+  publicDate: string;
+  sourceLink: string;
+}
+
+interface ShareholderItem {
+  name: string;
+  sharesOwned: string;
+  ownershipPct: string;
+  updateDate: string;
+}
+
+interface SubsidiaryItem {
+  name: string;
+  charterCapital: string;
+  ownershipPct: string;
+  type: string;
+  updateDate: string;
+}
+
+interface InsiderTradeItem {
+  title: string;
+  position: string;
+  buyVol: string;
+  sellVol: string;
+  volBefore: string;
+  volAfter: string;
+  dateAction: string;
+  status: string;
+}
+
+interface CompanyRatioItem {
+  year: string;
+  revenueGrowth: string;
+  netProfitGrowth: string;
+  ebitMargin: string;
+  grossMargin: string;
+  netProfitMargin: string;
+  roe: string;
+  roic: string;
+  roa: string;
+  pe: string;
+  pb: string;
+  ps: string;
+  eps: string;
+  bvps: string;
+  de: string;
+  currentRatio: string;
+  dividend: string;
+  ccc: string;
+}
+
+interface CompanyOverviewData {
+  profile: string;
+  industry: string;
+  history: string;
+}
+
+interface CompanyExtraData {
+  news: CompanyNewsItem[];
+  shareholders: ShareholderItem[];
+  subsidiaries: SubsidiaryItem[];
+  insiderTrades: InsiderTradeItem[];
+  ratios: CompanyRatioItem[];
+  overview: CompanyOverviewData | null;
+}
+
+// ===== Parse Company CSVs =====
+function parseCompanyCSVBySymbol(csv: string, symbol: string): Record<string, string>[] {
+  if (!csv) return [];
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headerLine = lines[0].replace(/^\uFEFF/, '');
+  const headers = headerLine.split(',').map(h => h.trim());
+  const symIdx = headers.findIndex(h => h === 'symbol');
+  if (symIdx === -1) return [];
+  const results: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = lines[i].split(',');
+    if (vals[symIdx]?.trim() === symbol) {
+      const rec: Record<string, string> = {};
+      headers.forEach((h, j) => { rec[h] = vals[j]?.trim() ?? ''; });
+      results.push(rec);
+    }
+  }
+  return results;
+}
+
+function parseNewsCSV(csv: string, symbol: string): CompanyNewsItem[] {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  return rows.slice(0, 10).map(r => ({
+    title: r['news_title'] || r['title'] || '',
+    shortContent: r['news_short_content'] || '',
+    publicDate: r['public_date'] ? new Date(parseInt(r['public_date'])).toLocaleDateString('vi-VN') : '',
+    sourceLink: r['news_source_link'] || '',
+  })).filter(n => n.title);
+}
+
+function parseShareholdersCSV(csv: string, symbol: string): ShareholderItem[] {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  return rows.map(r => ({
+    name: r['name'] || '',
+    sharesOwned: r['shares_owned'] ? parseInt(r['shares_owned']).toLocaleString('vi-VN') : '',
+    ownershipPct: r['ownership_percentage'] ? `${parseFloat(r['ownership_percentage']).toFixed(2)}%` : '',
+    updateDate: r['update_date'] ? r['update_date'].split('T')[0] : '',
+  })).filter(s => s.name);
+}
+
+function parseSubsidiariesCSV(csv: string, symbol: string): SubsidiaryItem[] {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  return rows.map(r => ({
+    name: r['name'] || '',
+    charterCapital: r['charter_capital'] ? (parseFloat(r['charter_capital']) / 1e9).toFixed(1) + ' tỷ' : '',
+    ownershipPct: r['ownership_percent'] ? `${parseFloat(r['ownership_percent']).toFixed(1)}%` : '',
+    type: r['type'] || '',
+    updateDate: r['update_date'] ? r['update_date'].split('T')[0] : '',
+  })).filter(s => s.name);
+}
+
+function parseInsiderCSV(csv: string, symbol: string): InsiderTradeItem[] {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  return rows.slice(0, 15).map(r => ({
+    title: r['title'] || '',
+    position: r['position_cd'] || '',
+    buyVol: r['buy_volume'] && r['buy_volume'] !== '' ? parseInt(r['buy_volume']).toLocaleString('vi-VN') : '-',
+    sellVol: r['sell_volume'] && r['sell_volume'] !== '' ? parseInt(r['sell_volume']).toLocaleString('vi-VN') : '-',
+    volBefore: r['volume_before'] ? parseInt(r['volume_before']).toLocaleString('vi-VN') : '',
+    volAfter: r['volume_after'] ? parseInt(r['volume_after']).toLocaleString('vi-VN') : '',
+    dateAction: r['date_action_to'] ? r['date_action_to'].split('T')[0] : '',
+    status: r['status_name'] || '',
+  })).filter(t => t.title);
+}
+
+function fmtRatio(val: string | undefined, pct = false, dec = 2): string {
+  if (!val || val === '' || val === 'NaN' || val === 'None') return '-';
+  const n = parseFloat(val);
+  if (isNaN(n)) return '-';
+  return pct ? `${(n * 100).toFixed(dec)}%` : n.toFixed(dec);
+}
+
+function parseCompanyRatiosCSV(csv: string, symbol: string): CompanyRatioItem[] {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  return rows
+    .sort((a, b) => parseFloat(b['year_report'] || '0') - parseFloat(a['year_report'] || '0'))
+    .slice(0, 5)
+    .map(r => ({
+      year: r['year_report'] ? parseFloat(r['year_report']).toFixed(0) : '',
+      revenueGrowth: fmtRatio(r['revenue_growth'], true, 1),
+      netProfitGrowth: fmtRatio(r['net_profit_growth'], true, 1),
+      ebitMargin: fmtRatio(r['ebit_margin'], true, 1),
+      grossMargin: fmtRatio(r['gross_margin'], true, 1),
+      netProfitMargin: fmtRatio(r['net_profit_margin'], true, 1),
+      roe: fmtRatio(r['roe'], true, 1),
+      roic: fmtRatio(r['roic'], true, 1),
+      roa: fmtRatio(r['roa'], true, 1),
+      pe: fmtRatio(r['pe'], false, 1),
+      pb: fmtRatio(r['pb'], false, 2),
+      ps: fmtRatio(r['ps'], false, 2),
+      eps: r['eps'] ? parseFloat(r['eps']).toLocaleString('vi-VN', { maximumFractionDigits: 0 }) : '-',
+      bvps: r['bvps'] ? parseFloat(r['bvps']).toLocaleString('vi-VN', { maximumFractionDigits: 0 }) : '-',
+      de: fmtRatio(r['de'], false, 2),
+      currentRatio: fmtRatio(r['current_ratio'], false, 2),
+      dividend: fmtRatio(r['dividend'], true, 1),
+      ccc: fmtRatio(r['ccc'], false, 0),
+    })).filter(r => r.year);
+}
+
+function parseOverviewCSV(csv: string, symbol: string): CompanyOverviewData | null {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    profile: r['company_profile'] || '',
+    industry: [r['icb_name2'], r['icb_name3'], r['icb_name4']].filter(Boolean).join(' > '),
+    history: (r['history'] || '').slice(0, 500),
+  };
+}
+
 function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) {
   const [analysis, setAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -651,6 +832,8 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
   const [financials, setFinancials] = useState<FinancialTables | null>(null);
   const [finLoading, setFinLoading] = useState(false);
   const [finTextCache, setFinTextCache] = useState('');
+  const [companyExtra, setCompanyExtra] = useState<CompanyExtraData | null>(null);
+  const [companyLoading, setCompanyLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -707,7 +890,31 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
       setFinLoading(false);
     };
 
+    // Load company extra data (news, shareholders, subsidiaries, insider trading, ratios, overview)
+    const loadCompanyExtra = async () => {
+      setCompanyLoading(true);
+      const [newsCSV, shareholdersCSV, subsidiariesCSV, insiderCSV, ratiosCSV, overviewCSV] = await Promise.all([
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_news.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/shareholders.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/subsidiaries.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/insider_trading.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_ratios.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_overview.csv`, controller.signal),
+      ]);
+
+      setCompanyExtra({
+        news: parseNewsCSV(newsCSV, stock.symbol),
+        shareholders: parseShareholdersCSV(shareholdersCSV, stock.symbol),
+        subsidiaries: parseSubsidiariesCSV(subsidiariesCSV, stock.symbol),
+        insiderTrades: parseInsiderCSV(insiderCSV, stock.symbol),
+        ratios: parseCompanyRatiosCSV(ratiosCSV, stock.symbol),
+        overview: parseOverviewCSV(overviewCSV, stock.symbol),
+      });
+      setCompanyLoading(false);
+    };
+
     loadFinancials();
+    loadCompanyExtra();
     return () => controller.abort();
   }, [stock]);
 
@@ -758,6 +965,39 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
       info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
       info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
       info += finTextCache;
+
+      // Add company extra data for AI context
+      if (companyExtra) {
+        if (companyExtra.overview) {
+          info += `\n\n--- THÔNG TIN CÔNG TY ---\n`;
+          info += `Ngành: ${companyExtra.overview.industry}\n`;
+          if (companyExtra.overview.profile) info += `Mô tả: ${companyExtra.overview.profile.slice(0, 300)}\n`;
+        }
+        if (companyExtra.shareholders.length > 0) {
+          info += `\n--- CỔ ĐÔNG LỚN ---\n`;
+          companyExtra.shareholders.slice(0, 5).forEach(s => {
+            info += `${s.name}: ${s.ownershipPct} (${s.sharesOwned} cp)\n`;
+          });
+        }
+        if (companyExtra.insiderTrades.length > 0) {
+          info += `\n--- GIAO DỊCH NỘI BỘ GẦN ĐÂY ---\n`;
+          companyExtra.insiderTrades.slice(0, 5).forEach(t => {
+            info += `${t.dateAction}: Mua ${t.buyVol} | Bán ${t.sellVol} (${t.status})\n`;
+          });
+        }
+        if (companyExtra.ratios.length > 0) {
+          info += `\n--- CHỈ SỐ CÔNG TY (theo năm) ---\n`;
+          companyExtra.ratios.slice(0, 3).forEach(r => {
+            info += `${r.year}: ROE=${r.roe} ROIC=${r.roic} P/E=${r.pe} P/B=${r.pb} Growth: Rev=${r.revenueGrowth} Profit=${r.netProfitGrowth} D/E=${r.de} Dividend=${r.dividend}\n`;
+          });
+        }
+        if (companyExtra.news.length > 0) {
+          info += `\n--- TIN TỨC GẦN ĐÂY ---\n`;
+          companyExtra.news.slice(0, 5).forEach(n => {
+            info += `[${n.publicDate}] ${n.title}\n`;
+          });
+        }
+      }
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -947,6 +1187,183 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
 
           {!finLoading && !hasFinancials && (
             <div className="px-2 py-2 text-xs text-zinc-600 italic">Không tìm thấy dữ liệu tài chính cho mã này</div>
+          )}
+
+          {/* Company Extra Data */}
+          {companyLoading && (
+            <div className="flex items-center gap-2 px-2 py-3 text-xs text-zinc-500">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              Đang tải thông tin công ty...
+            </div>
+          )}
+
+          {companyExtra && (
+            <>
+              {/* Company Overview */}
+              {companyExtra.overview && (
+                <DataSection title={`Thông tin công ty — ${companyExtra.overview.industry || ''}`}>
+                  <div className="px-2 text-xs text-zinc-400 leading-relaxed space-y-1.5">
+                    {companyExtra.overview.profile && <p>{companyExtra.overview.profile}</p>}
+                  </div>
+                </DataSection>
+              )}
+
+              {/* Company Ratios (aggregated) */}
+              {companyExtra.ratios.length > 0 && (
+                <DataSection title="Chỉ số công ty (theo năm)">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chỉ tiêu</th>
+                          {companyExtra.ratios.map(r => (
+                            <th key={r.year} className="px-2 py-1 text-right text-zinc-500 font-normal">{r.year}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          { label: 'Tăng trưởng DT', key: 'revenueGrowth' as const },
+                          { label: 'Tăng trưởng LNST', key: 'netProfitGrowth' as const },
+                          { label: 'Biên LN gộp', key: 'grossMargin' as const },
+                          { label: 'Biên EBIT', key: 'ebitMargin' as const },
+                          { label: 'Biên LN ròng', key: 'netProfitMargin' as const },
+                          { label: 'ROE', key: 'roe' as const },
+                          { label: 'ROIC', key: 'roic' as const },
+                          { label: 'ROA', key: 'roa' as const },
+                          { label: 'P/E', key: 'pe' as const },
+                          { label: 'P/B', key: 'pb' as const },
+                          { label: 'P/S', key: 'ps' as const },
+                          { label: 'EPS', key: 'eps' as const },
+                          { label: 'BVPS', key: 'bvps' as const },
+                          { label: 'D/E', key: 'de' as const },
+                          { label: 'Current Ratio', key: 'currentRatio' as const },
+                          { label: 'Cổ tức', key: 'dividend' as const },
+                          { label: 'CCC (ngày)', key: 'ccc' as const },
+                        ].map(({ label, key }) => (
+                          <tr key={key} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                            <td className="px-2 py-1 text-zinc-400">{label}</td>
+                            {companyExtra.ratios.map(r => (
+                              <td key={r.year} className="px-2 py-1 text-right font-mono text-zinc-300">{r[key]}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </DataSection>
+              )}
+
+              {/* Shareholders */}
+              {companyExtra.shareholders.length > 0 && (
+                <DataSection title={`Cổ đông lớn (${companyExtra.shareholders.length})`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Số CP</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Tỷ lệ</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Cập nhật</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {companyExtra.shareholders.map((s, i) => (
+                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                            <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
+                            <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.sharesOwned}</td>
+                            <td className="px-2 py-1 text-right font-mono text-amber-400 font-bold">{s.ownershipPct}</td>
+                            <td className="px-2 py-1 text-right text-zinc-500">{s.updateDate}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </DataSection>
+              )}
+
+              {/* Subsidiaries */}
+              {companyExtra.subsidiaries.length > 0 && (
+                <DataSection title={`Công ty con & liên kết (${companyExtra.subsidiaries.length})`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Vốn</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Sở hữu</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Loại</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {companyExtra.subsidiaries.map((s, i) => (
+                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                            <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
+                            <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.charterCapital}</td>
+                            <td className="px-2 py-1 text-right font-mono text-blue-400 font-bold">{s.ownershipPct}</td>
+                            <td className="px-2 py-1 text-right text-zinc-500">{s.type}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </DataSection>
+              )}
+
+              {/* Insider Trading */}
+              {companyExtra.insiderTrades.length > 0 && (
+                <DataSection title={`Giao dịch nội bộ (${companyExtra.insiderTrades.length})`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Ngày</th>
+                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chức vụ</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Mua</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Bán</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Trước GD</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Sau GD</th>
+                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">TT</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {companyExtra.insiderTrades.map((t, i) => (
+                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                            <td className="px-2 py-1 text-zinc-400 whitespace-nowrap">{t.dateAction}</td>
+                            <td className="px-2 py-1 text-zinc-300 max-w-[120px] truncate" title={t.position}>{t.position}</td>
+                            <td className="px-2 py-1 text-right font-mono text-green-400">{t.buyVol}</td>
+                            <td className="px-2 py-1 text-right font-mono text-red-400">{t.sellVol}</td>
+                            <td className="px-2 py-1 text-right font-mono text-zinc-400">{t.volBefore}</td>
+                            <td className="px-2 py-1 text-right font-mono text-zinc-300">{t.volAfter}</td>
+                            <td className="px-2 py-1 text-right text-zinc-500">{t.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </DataSection>
+              )}
+
+              {/* Company News */}
+              {companyExtra.news.length > 0 && (
+                <DataSection title={`Tin tức công ty (${companyExtra.news.length})`}>
+                  <div className="space-y-2 px-1">
+                    {companyExtra.news.map((n, i) => (
+                      <div key={i} className="flex items-start gap-2 py-1 border-b border-zinc-800/30">
+                        <span className="text-[10px] text-zinc-600 whitespace-nowrap mt-0.5">{n.publicDate}</span>
+                        <div className="flex-1 min-w-0">
+                          {n.sourceLink ? (
+                            <a href={n.sourceLink} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline leading-snug line-clamp-2">{n.title}</a>
+                          ) : (
+                            <span className="text-xs text-zinc-300 leading-snug line-clamp-2">{n.title}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </DataSection>
+              )}
+            </>
           )}
 
           {/* AI Analysis */}
