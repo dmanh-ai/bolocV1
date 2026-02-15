@@ -216,6 +216,14 @@ Yêu cầu output (BẮT BUỘC theo thứ tự):
 7. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do
 8. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
 
+⚠️ NẾU có mục "VỊ THẾ ĐANG GIỮ TRONG PORTFOLIO" trong dữ liệu → nhà đầu tư ĐANG NẮM GIỮ cổ phiếu này. Bắt buộc thêm mục:
+9. **QUẢN LÝ VỊ THẾ HIỆN TẠI** — Phân tích dựa trên giá vốn, lời/lỗ hiện tại, và tín hiệu kỹ thuật:
+   - **Khuyến nghị**: GIỮ / CHỐT LỜI (1 phần hoặc toàn bộ) / CẮT LỖ — kèm lý do rõ ràng
+   - **Mục tiêu (Target)**: Giá target ngắn hạn và trung hạn (nếu giữ)
+   - **Cắt lỗ (Stoploss)**: Mức stoploss cụ thể dựa trên hỗ trợ gần nhất
+   - **Tỷ lệ R:R** (Risk:Reward) tính từ giá hiện tại
+   - **Hành động cụ thể**: Ví dụ "Giữ 70%, chốt lời 30% nếu giá đạt X", "Cắt lỗ ngay nếu về dưới Y"
+
 Phong cách: ngắn gọn, bullet points, HÀNH ĐỘNG cụ thể. Viết bằng tiếng Việt.
 Nếu không có dữ liệu tài chính, chỉ phân tích kỹ thuật.
 Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không phải khuyến nghị đầu tư chính thức."`;
@@ -1246,6 +1254,41 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
           });
         }
       }
+
+      // Check if stock is in portfolio → add position context for AI
+      try {
+        const savedHoldings = localStorage.getItem('portfolio_holdings');
+        if (savedHoldings) {
+          const allHoldings: PortfolioHolding[] = JSON.parse(savedHoldings);
+          const myHoldings = allHoldings.filter(h => h.symbol === stock.symbol);
+          if (myHoldings.length > 0) {
+            let totalBuyQty = 0, totalSellQty = 0, totalBuyCost = 0;
+            myHoldings.forEach(h => {
+              if (h.type === 'BUY') {
+                totalBuyQty += h.quantity;
+                totalBuyCost += h.buyPrice * h.quantity;
+              } else {
+                totalSellQty += h.quantity;
+              }
+            });
+            const netQty = totalBuyQty - totalSellQty;
+            if (netQty > 0) {
+              const avgCost = totalBuyCost / totalBuyQty;
+              const currentPrice = stock.price * 1000;
+              const pnl = (currentPrice - avgCost) * netQty;
+              const pnlPct = ((currentPrice - avgCost) / avgCost) * 100;
+              info += `\n\n⚠️ === VỊ THẾ ĐANG GIỮ TRONG PORTFOLIO ===\n`;
+              info += `Số lượng đang giữ: ${netQty.toLocaleString('vi-VN')} cổ phiếu\n`;
+              info += `Giá vốn trung bình: ${avgCost.toLocaleString('vi-VN')} VNĐ\n`;
+              info += `Giá hiện tại: ${currentPrice.toLocaleString('vi-VN')} VNĐ\n`;
+              info += `Lời/Lỗ: ${pnl >= 0 ? '+' : ''}${pnl.toLocaleString('vi-VN')} VNĐ (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n`;
+              const buyDates = myHoldings.filter(h => h.type === 'BUY').map(h => h.buyDate).join(', ');
+              info += `Ngày mua: ${buyDates}\n`;
+              info += `→ NHÀ ĐẦU TƯ ĐANG GIỮ CỔ PHIẾU NÀY - Hãy đưa ra khuyến nghị GIỮ/BÁN/CHỐT LỜI/CẮT LỖ + Target + Stoploss cụ thể\n`;
+            }
+          }
+        }
+      } catch { /* ignore localStorage errors */ }
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
