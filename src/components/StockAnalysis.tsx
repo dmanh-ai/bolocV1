@@ -202,6 +202,114 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
   );
 }
 
+// ==================== AI PROVIDER ABSTRACTION (Claude + Gemini) ====================
+
+type AIProvider = 'anthropic' | 'gemini';
+
+function getAIProvider(): { provider: AIProvider; apiKey: string } {
+  // Priority 1: Anthropic key from localStorage
+  const anthropicKey = localStorage.getItem('anthropic_api_key');
+  if (anthropicKey) return { provider: 'anthropic', apiKey: anthropicKey };
+  // Priority 2: Gemini key from localStorage
+  const geminiKey = localStorage.getItem('gemini_api_key');
+  if (geminiKey) return { provider: 'gemini', apiKey: geminiKey };
+  // Priority 3: Gemini key from env (free default)
+  const envGeminiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  if (envGeminiKey) return { provider: 'gemini', apiKey: envGeminiKey };
+  // No key available
+  return { provider: 'gemini', apiKey: '' };
+}
+
+async function streamAI(
+  systemPrompt: string,
+  userMessage: string,
+  onText: (fullText: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { provider, apiKey } = getAIProvider();
+  if (!apiKey) {
+    throw new Error('Chưa có API Key. Nhập Gemini API Key (miễn phí) hoặc Anthropic API Key ở tab "AI Khuyến nghị".');
+  }
+
+  let response: Response;
+
+  if (provider === 'anthropic') {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 4096,
+        stream: true,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+      }),
+      signal,
+    });
+  } else {
+    // Gemini 2.0 Flash (free tier: 15 RPM, 1500 RPD)
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+          generationConfig: { maxOutputTokens: 4096 },
+        }),
+        signal,
+      },
+    );
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    const label = provider === 'anthropic' ? 'Claude' : 'Gemini';
+    throw new Error(`${label} API error ${response.status}: ${errText.slice(0, 300)}`);
+  }
+
+  // Parse SSE stream (both providers use data: prefix)
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const jsonStr = line.slice(6).trim();
+      if (!jsonStr || jsonStr === '[DONE]') continue;
+      try {
+        const event = JSON.parse(jsonStr);
+        let chunk = '';
+        if (provider === 'anthropic') {
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            chunk = event.delta.text;
+          }
+        } else {
+          // Gemini format: candidates[0].content.parts[0].text
+          chunk = event?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        }
+        if (chunk) {
+          text += chunk;
+          onText(text);
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  }
+}
+
 // ==================== STOCK AI DETAIL MODAL ====================
 
 const STOCK_AI_PROMPT = `Bạn là chuyên gia phân tích chứng khoán Việt Nam (cả kỹ thuật lẫn cơ bản). Nhiệm vụ: phân tích TOÀN DIỆN 1 mã cổ phiếu dựa trên dữ liệu kỹ thuật VÀ báo cáo tài chính được cung cấp.
@@ -215,6 +323,14 @@ Yêu cầu output (BẮT BUỘC theo thứ tự):
 6. **VÙNG GIÁ QUAN TRỌNG** — Hỗ trợ, kháng cự, vùng mua lý tưởng
 7. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do
 8. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
+
+⚠️ NẾU có mục "VỊ THẾ ĐANG GIỮ TRONG PORTFOLIO" trong dữ liệu → nhà đầu tư ĐANG NẮM GIỮ cổ phiếu này. Bắt buộc thêm mục:
+9. **QUẢN LÝ VỊ THẾ HIỆN TẠI** — Phân tích dựa trên giá vốn, lời/lỗ hiện tại, và tín hiệu kỹ thuật:
+   - **Khuyến nghị**: GIỮ / CHỐT LỜI (1 phần hoặc toàn bộ) / CẮT LỖ — kèm lý do rõ ràng
+   - **Mục tiêu (Target)**: Giá target ngắn hạn và trung hạn (nếu giữ)
+   - **Cắt lỗ (Stoploss)**: Mức stoploss cụ thể dựa trên hỗ trợ gần nhất
+   - **Tỷ lệ R:R** (Risk:Reward) tính từ giá hiện tại
+   - **Hành động cụ thể**: Ví dụ "Giữ 70%, chốt lời 30% nếu giá đạt X", "Cắt lỗ ngay nếu về dưới Y"
 
 Phong cách: ngắn gọn, bullet points, HÀNH ĐỘNG cụ thể. Viết bằng tiếng Việt.
 Nếu không có dữ liệu tài chính, chỉ phân tích kỹ thuật.
@@ -1163,11 +1279,6 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
   // AI analysis — triggered by button
   const runAnalysis = useCallback(async () => {
     if (!stock) return;
-    const apiKey = localStorage.getItem('anthropic_api_key');
-    if (!apiKey) {
-      setError('Chưa có API Key. Vui lòng nhập ở tab "AI Khuyến nghị" trước.');
-      return;
-    }
 
     setIsLoading(true);
     setError(null);
@@ -1247,54 +1358,47 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
         }
       }
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 4096,
-          stream: true,
-          system: STOCK_AI_PROMPT,
-          messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
-      }
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let text = '';
-      let buf = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr || jsonStr === '[DONE]') continue;
-            try {
-              const event = JSON.parse(jsonStr);
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                text += event.delta.text;
-                setAnalysis(text);
+      // Check if stock is in portfolio → add position context for AI
+      try {
+        const savedHoldings = localStorage.getItem('portfolio_holdings');
+        if (savedHoldings) {
+          const allHoldings: PortfolioHolding[] = JSON.parse(savedHoldings);
+          const myHoldings = allHoldings.filter(h => h.symbol === stock.symbol);
+          if (myHoldings.length > 0) {
+            let totalBuyQty = 0, totalSellQty = 0, totalBuyCost = 0;
+            myHoldings.forEach(h => {
+              if (h.type === 'BUY') {
+                totalBuyQty += h.quantity;
+                totalBuyCost += h.buyPrice * h.quantity;
+              } else {
+                totalSellQty += h.quantity;
               }
-            } catch { /* ignore */ }
+            });
+            const netQty = totalBuyQty - totalSellQty;
+            if (netQty > 0) {
+              const avgCost = totalBuyCost / totalBuyQty;
+              const currentPrice = stock.price * 1000;
+              const pnl = (currentPrice - avgCost) * netQty;
+              const pnlPct = ((currentPrice - avgCost) / avgCost) * 100;
+              info += `\n\n⚠️ === VỊ THẾ ĐANG GIỮ TRONG PORTFOLIO ===\n`;
+              info += `Số lượng đang giữ: ${netQty.toLocaleString('vi-VN')} cổ phiếu\n`;
+              info += `Giá vốn trung bình: ${avgCost.toLocaleString('vi-VN')} VNĐ\n`;
+              info += `Giá hiện tại: ${currentPrice.toLocaleString('vi-VN')} VNĐ\n`;
+              info += `Lời/Lỗ: ${pnl >= 0 ? '+' : ''}${pnl.toLocaleString('vi-VN')} VNĐ (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)\n`;
+              const buyDates = myHoldings.filter(h => h.type === 'BUY').map(h => h.buyDate).join(', ');
+              info += `Ngày mua: ${buyDates}\n`;
+              info += `→ NHÀ ĐẦU TƯ ĐANG GIỮ CỔ PHIẾU NÀY - Hãy đưa ra khuyến nghị GIỮ/BÁN/CHỐT LỜI/CẮT LỖ + Target + Stoploss cụ thể\n`;
+            }
           }
         }
-      }
+      } catch { /* ignore localStorage errors */ }
+
+      await streamAI(
+        STOCK_AI_PROMPT,
+        `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}`,
+        (t) => setAnalysis(t),
+        controller.signal,
+      );
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Lỗi không xác định');
@@ -2510,13 +2614,16 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
   const [isLoading, setIsLoading] = useState(false);
   const [analyzedAt, setAnalyzedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState('');
+  const [anthropicKey, setAnthropicKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // Load API key from localStorage on mount
+  // Load API keys from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem('anthropic_api_key');
-    if (saved) setApiKey(saved);
+    const ak = localStorage.getItem('anthropic_api_key');
+    if (ak) setAnthropicKey(ak);
+    const gk = localStorage.getItem('gemini_api_key');
+    if (gk) setGeminiKey(gk);
   }, []);
 
   const generateSummary = useCallback(() => {
@@ -2584,71 +2691,13 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     setRecommendation('');
 
     try {
-      if (!apiKey) {
-        setShowKeyInput(true);
-        throw new Error('Vui lòng nhập Anthropic API Key để sử dụng tính năng này.');
-      }
-
       const summary = generateSummary();
 
-      // Call Claude API directly from browser (GitHub Pages = static, no server)
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 4096,
-          stream: true,
-          system: AI_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: 'user',
-              content: `Hãy phân tích dữ liệu dashboard sau và đưa ra khuyến nghị đầu tư chi tiết:\n\n${summary}`,
-            },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Claude API error ${response.status}: ${errText.slice(0, 300)}`);
-      }
-
-      // Parse SSE stream from Anthropic API
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let text = '';
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr || jsonStr === '[DONE]') continue;
-            try {
-              const event = JSON.parse(jsonStr);
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                text += event.delta.text;
-                setRecommendation(text);
-              }
-            } catch {
-              // Ignore JSON parse errors for incomplete chunks
-            }
-          }
-        }
-      }
+      await streamAI(
+        AI_SYSTEM_PROMPT,
+        `Hãy phân tích dữ liệu dashboard sau và đưa ra khuyến nghị đầu tư chi tiết:\n\n${summary}`,
+        (t) => setRecommendation(t),
+      );
 
       setAnalyzedAt(new Date().toLocaleString('vi-VN'));
     } catch (err: unknown) {
@@ -2657,7 +2706,7 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     } finally {
       setIsLoading(false);
     }
-  }, [generateSummary, apiKey]);
+  }, [generateSummary]);
 
   return (
     <div className="space-y-4">
@@ -2693,43 +2742,59 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
 
       {/* API Key Input */}
       {showKeyInput && (
-        <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-2">
-          <p className="text-xs text-amber-400">Nhập Anthropic API Key (lưu trong trình duyệt, không gửi đi đâu ngoài Anthropic API):</p>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-ant-api03-..."
-              className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
-              onClick={() => {
-                if (apiKey.trim()) {
-                  localStorage.setItem('anthropic_api_key', apiKey.trim());
-                  setShowKeyInput(false);
-                  setError(null);
-                }
-              }}
-            >
-              Lưu
-            </Button>
+        <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-3">
+          <p className="text-xs text-zinc-400">Không nhập key = dùng <span className="text-green-400 font-medium">Gemini 2.0 Flash miễn phí</span> (nếu có env key). Nhập key để chọn AI provider:</p>
+          <div className="space-y-2">
+            <div className="flex gap-2 items-center">
+              <span className="text-[10px] text-blue-400 w-16 shrink-0">Gemini</span>
+              <input
+                type="password"
+                value={geminiKey}
+                onChange={(e) => setGeminiKey(e.target.value)}
+                placeholder="AIza... (miễn phí tại ai.google.dev)"
+                className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex gap-2 items-center">
+              <span className="text-[10px] text-amber-400 w-16 shrink-0">Anthropic</span>
+              <input
+                type="password"
+                value={anthropicKey}
+                onChange={(e) => setAnthropicKey(e.target.value)}
+                placeholder="sk-ant-... (trả phí, chất lượng cao)"
+                className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
           </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
+            onClick={() => {
+              if (anthropicKey.trim()) localStorage.setItem('anthropic_api_key', anthropicKey.trim());
+              else localStorage.removeItem('anthropic_api_key');
+              if (geminiKey.trim()) localStorage.setItem('gemini_api_key', geminiKey.trim());
+              else localStorage.removeItem('gemini_api_key');
+              setShowKeyInput(false);
+              setError(null);
+            }}
+          >
+            Lưu
+          </Button>
         </div>
       )}
 
-      {/* Saved key indicator + change button */}
-      {apiKey && !showKeyInput && (
+      {/* Active provider indicator */}
+      {!showKeyInput && (
         <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <span>API Key: ****{apiKey.slice(-6)}</span>
-          <button
-            className="text-amber-500 hover:text-amber-400 underline"
-            onClick={() => setShowKeyInput(true)}
-          >
-            Đổi key
+          {(() => {
+            const p = getAIProvider();
+            if (p.provider === 'anthropic') return <span className="text-amber-400">AI: Claude Sonnet (Anthropic) ****{p.apiKey.slice(-6)}</span>;
+            if (p.apiKey) return <span className="text-blue-400">AI: Gemini 2.0 Flash (miễn phí)</span>;
+            return <span className="text-zinc-500">AI: Chưa có API key</span>;
+          })()}
+          <button className="text-amber-500 hover:text-amber-400 underline" onClick={() => setShowKeyInput(true)}>
+            Cài đặt
           </button>
         </div>
       )}
@@ -2815,8 +2880,6 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
   const [recommendation, setRecommendation] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState('');
-  const [showKeyInput, setShowKeyInput] = useState(false);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -2829,8 +2892,6 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       setTotalCapital(Number(cap));
       setCapitalInput(Number(cap).toLocaleString('vi-VN'));
     }
-    const key = localStorage.getItem('anthropic_api_key');
-    if (key) setApiKey(key);
   }, []);
 
   // Save holdings to localStorage
@@ -2947,11 +3008,6 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       setError('Vui lòng thêm ít nhất 1 mã vào danh mục.');
       return;
     }
-    if (!apiKey) {
-      setShowKeyInput(true);
-      setError('Vui lòng nhập Anthropic API Key.');
-      return;
-    }
 
     setIsLoading(true);
     setError(null);
@@ -2984,59 +3040,17 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       summary += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
       summary += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 4096,
-          stream: true,
-          system: PORTFOLIO_AI_PROMPT,
-          messages: [{ role: 'user', content: `Phân tích danh mục đầu tư sau và đưa ra khuyến nghị:\n\n${summary}` }],
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Claude API error ${response.status}: ${errText.slice(0, 300)}`);
-      }
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let text = '';
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr || jsonStr === '[DONE]') continue;
-            try {
-              const event = JSON.parse(jsonStr);
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                text += event.delta.text;
-                setRecommendation(text);
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      }
+      await streamAI(
+        PORTFOLIO_AI_PROMPT,
+        `Phân tích danh mục đầu tư sau và đưa ra khuyến nghị:\n\n${summary}`,
+        (t) => setRecommendation(t),
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Lỗi không xác định');
     } finally {
       setIsLoading(false);
     }
-  }, [holdings, apiKey, totalCapital, portfolioStats, data.regime]);
+  }, [holdings, totalCapital, portfolioStats, data.regime]);
 
   const fmtVND = (n: number) => n.toLocaleString('vi-VN');
 
@@ -3288,35 +3302,15 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               </Button>
             </div>
 
-            {/* API Key Input */}
-            {showKeyInput && (
-              <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-2">
-                <p className="text-xs text-amber-400">Nhập Anthropic API Key:</p>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-ant-api03-..."
-                    className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
-                    onClick={() => {
-                      if (apiKey.trim()) {
-                        localStorage.setItem('anthropic_api_key', apiKey.trim());
-                        setShowKeyInput(false);
-                        setError(null);
-                      }
-                    }}
-                  >
-                    Lưu
-                  </Button>
-                </div>
-              </div>
-            )}
+            {/* AI Provider indicator */}
+            <div className="text-xs text-zinc-500">
+              {(() => {
+                const p = getAIProvider();
+                if (p.provider === 'anthropic') return <span className="text-amber-400">AI: Claude (Anthropic)</span>;
+                if (p.apiKey) return <span className="text-blue-400">AI: Gemini Flash (miễn phí)</span>;
+                return <span className="text-red-400">Chưa có API key — cài đặt ở tab AI Khuyến nghị</span>;
+              })()}
+            </div>
 
             {error && (
               <div className="rounded-lg border border-red-800 bg-red-900/20 p-3">
