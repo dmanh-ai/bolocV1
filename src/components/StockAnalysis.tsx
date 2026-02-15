@@ -234,6 +234,71 @@ async function fetchFinancialCSV(url: string, signal?: AbortSignal): Promise<str
   }
 }
 
+// ===== TCBS API Fallback =====
+const TCBS_BASE = 'https://apipubaws.tcbs.com.vn/tcanalysis/v1';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchTCBS(symbol: string, type: string, signal?: AbortSignal): Promise<any> {
+  const sym = symbol.toUpperCase();
+  let url: string;
+  switch (type) {
+    case 'shareholders': url = `${TCBS_BASE}/company/${sym}/large-share-holders`; break;
+    case 'news': url = `${TCBS_BASE}/ticker/${sym}/activity-news?page=0&size=15`; break;
+    case 'insider': url = `${TCBS_BASE}/company/${sym}/insider-dealing?page=0&size=20`; break;
+    default: return null;
+  }
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function parseTCBSShareholders(data: unknown): ShareholderItem[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = data as any;
+  const list = d?.listShareHolder || d?.listMajorShareHolder || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return list.map((s: any) => ({
+    name: s.name || s.shareHolderName || '',
+    sharesOwned: (s.no || s.quantity) ? parseInt(s.no || s.quantity).toLocaleString('vi-VN') : '',
+    ownershipPct: s.ownPercent != null ? `${(s.ownPercent * 100).toFixed(2)}%` : '',
+    updateDate: '',
+  })).filter((s: ShareholderItem) => s.name);
+}
+
+function parseTCBSNews(data: unknown): CompanyNewsItem[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = data as any;
+  const list = d?.listActivityNews || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return list.slice(0, 10).map((n: any) => ({
+    title: n.title || '',
+    shortContent: n.content?.slice(0, 200) || '',
+    publicDate: n.publishDate ? new Date(n.publishDate).toLocaleDateString('vi-VN') : '',
+    sourceLink: n.source || '',
+  })).filter((n: CompanyNewsItem) => n.title);
+}
+
+function parseTCBSInsider(data: unknown): InsiderTradeItem[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = data as any;
+  const list = d?.listInsiderDealing || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return list.slice(0, 15).map((t: any) => ({
+    title: t.anlesName || t.dealingName || t.name || '',
+    position: t.anlesPosition || t.position || '',
+    buyVol: (t.dealingAction === 'Buy' || t.dealingAction === 'Bought') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
+    sellVol: (t.dealingAction === 'Sell' || t.dealingAction === 'Sold') && t.quantity ? parseInt(t.quantity).toLocaleString('vi-VN') : '-',
+    volBefore: '',
+    volAfter: '',
+    dateAction: (t.anDate || t.dealingDateFrom) ? new Date(t.anDate || t.dealingDateFrom).toISOString().split('T')[0] : '',
+    status: t.dealingMethod || '',
+  })).filter((t: InsiderTradeItem) => t.title);
+}
+
 function parseCSVToSummary(csv: string, label: string, maxCols?: number): string {
   if (!csv) return '';
   const lines = csv.trim().split('\n');
@@ -1008,14 +1073,35 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_ownership.csv`, controller.signal),
       ]);
 
+      let news = parseNewsCSV(newsCSV, stock.symbol);
+      let shareholders = parseShareholdersCSV(shareholdersCSV, stock.symbol);
+      const subsidiaries = parseSubsidiariesCSV(subsidiariesCSV, stock.symbol);
+      let insiderTrades = parseInsiderCSV(insiderCSV, stock.symbol);
+      const ratios = parseCompanyRatiosCSV(ratiosCSV, stock.symbol);
+      const overview = parseOverviewCSV(overviewCSV, stock.symbol);
       const ownershipData = parseOwnershipCSV(ownershipCSV, stock.symbol);
+
+      // Fallback to TCBS API if CSV has no data for this stock
+      const needsTCBS = news.length === 0 || shareholders.length === 0;
+      if (needsTCBS) {
+        const tcbsFetches = await Promise.all([
+          news.length === 0 ? fetchTCBS(stock.symbol, 'news', controller.signal) : null,
+          shareholders.length === 0 ? fetchTCBS(stock.symbol, 'shareholders', controller.signal) : null,
+          insiderTrades.length === 0 ? fetchTCBS(stock.symbol, 'insider', controller.signal) : null,
+        ]);
+
+        if (tcbsFetches[0]) news = parseTCBSNews(tcbsFetches[0]);
+        if (tcbsFetches[1]) shareholders = parseTCBSShareholders(tcbsFetches[1]);
+        if (tcbsFetches[2]) insiderTrades = parseTCBSInsider(tcbsFetches[2]);
+      }
+
       setCompanyExtra({
-        news: parseNewsCSV(newsCSV, stock.symbol),
-        shareholders: parseShareholdersCSV(shareholdersCSV, stock.symbol),
-        subsidiaries: parseSubsidiariesCSV(subsidiariesCSV, stock.symbol),
-        insiderTrades: parseInsiderCSV(insiderCSV, stock.symbol),
-        ratios: parseCompanyRatiosCSV(ratiosCSV, stock.symbol),
-        overview: parseOverviewCSV(overviewCSV, stock.symbol),
+        news,
+        shareholders,
+        subsidiaries,
+        insiderTrades,
+        ratios,
+        overview,
         ownership: ownershipData.items,
         freefloatPct: ownershipData.freefloatPct,
       });
