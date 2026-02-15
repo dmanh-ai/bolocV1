@@ -629,12 +629,20 @@ function FinTable({ data }: { data: TableData }) {
   );
 }
 
+interface OwnershipItem {
+  ownerType: string;
+  ownershipPct: number;
+  sharesOwned: string;
+}
+
 interface StockAIModalProps {
   stock: TOStock | RSStock | null;
   stockType: 'TO' | 'RS';
   regime: MarketRegime;
   onClose: () => void;
   companyNameMap?: Record<string, string>;
+  toStocks?: TOStock[];
+  rsStocks?: RSStock[];
 }
 
 interface FinancialTables {
@@ -713,6 +721,8 @@ interface CompanyExtraData {
   insiderTrades: InsiderTradeItem[];
   ratios: CompanyRatioItem[];
   overview: CompanyOverviewData | null;
+  ownership: OwnershipItem[];
+  freefloatPct: number | null;
 }
 
 // ===== Parse Company CSVs =====
@@ -826,6 +836,28 @@ function parseOverviewCSV(csv: string, symbol: string): CompanyOverviewData | nu
   };
 }
 
+const LOCKED_OWNER_TYPES = ['CĐ Nhà nước', 'CĐ lớn trong nước', 'CĐ lớn', 'CĐ sáng lập', 'Cổ phiếu quỹ'];
+
+function parseOwnershipCSV(csv: string, symbol: string): { items: OwnershipItem[]; freefloatPct: number | null } {
+  const rows = parseCompanyCSVBySymbol(csv, symbol);
+  if (rows.length === 0) return { items: [], freefloatPct: null };
+  const items: OwnershipItem[] = rows.map(r => ({
+    ownerType: r['owner_type'] || '',
+    ownershipPct: parseFloat(r['ownership_percentage'] || '0'),
+    sharesOwned: r['shares_owned'] ? parseInt(r['shares_owned']).toLocaleString('vi-VN') : '',
+  })).filter(o => o.ownerType);
+
+  // Calculate freefloat: 100% - locked ownership (state + major + founders + treasury)
+  let lockedPct = 0;
+  for (const item of items) {
+    if (LOCKED_OWNER_TYPES.some(t => item.ownerType.includes(t))) {
+      lockedPct += item.ownershipPct;
+    }
+  }
+  const freefloatPct = items.length > 0 ? Math.max(0, 100 - lockedPct) : null;
+  return { items, freefloatPct };
+}
+
 function parseCSVRow(line: string): string[] {
   const fields: string[] = [];
   let i = 0;
@@ -873,7 +905,7 @@ function parseCompanyNameMap(csv: string): Record<string, string> {
   return map;
 }
 
-function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }: StockAIModalProps) {
+function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, toStocks = [], rsStocks = [] }: StockAIModalProps) {
   const [analysis, setAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -884,6 +916,10 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
   const [companyLoading, setCompanyLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Lookup counterpart: if opened from TO tab, find matching RS stock and vice versa
+  const toStock = useMemo(() => stockType === 'TO' ? stock as TOStock : toStocks.find(s => s.symbol === stock?.symbol) ?? null, [stock, stockType, toStocks]);
+  const rsStock = useMemo(() => stockType === 'RS' ? stock as RSStock : rsStocks.find(s => s.symbol === stock?.symbol) ?? null, [stock, stockType, rsStocks]);
 
   // Auto-scroll as content streams (only during AI analysis)
   useEffect(() => {
@@ -938,18 +974,20 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
       setFinLoading(false);
     };
 
-    // Load company extra data (news, shareholders, subsidiaries, insider trading, ratios, overview)
+    // Load company extra data (news, shareholders, subsidiaries, insider trading, ratios, overview, ownership)
     const loadCompanyExtra = async () => {
       setCompanyLoading(true);
-      const [newsCSV, shareholdersCSV, subsidiariesCSV, insiderCSV, ratiosCSV, overviewCSV] = await Promise.all([
+      const [newsCSV, shareholdersCSV, subsidiariesCSV, insiderCSV, ratiosCSV, overviewCSV, ownershipCSV] = await Promise.all([
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_news.csv`, controller.signal),
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/shareholders.csv`, controller.signal),
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/subsidiaries.csv`, controller.signal),
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/insider_trading.csv`, controller.signal),
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_ratios.csv`, controller.signal),
         fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_overview.csv`, controller.signal),
+        fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_ownership.csv`, controller.signal),
       ]);
 
+      const ownershipData = parseOwnershipCSV(ownershipCSV, stock.symbol);
       setCompanyExtra({
         news: parseNewsCSV(newsCSV, stock.symbol),
         shareholders: parseShareholdersCSV(shareholdersCSV, stock.symbol),
@@ -957,6 +995,8 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
         insiderTrades: parseInsiderCSV(insiderCSV, stock.symbol),
         ratios: parseCompanyRatiosCSV(ratiosCSV, stock.symbol),
         overview: parseOverviewCSV(overviewCSV, stock.symbol),
+        ownership: ownershipData.items,
+        freefloatPct: ownershipData.freefloatPct,
       });
       setCompanyLoading(false);
     };
@@ -988,26 +1028,25 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
       info += `Thay đổi hôm nay: ${stock.changePct >= 0 ? '+' : ''}${stock.changePct.toFixed(2)}%\n`;
       info += `GTGD (thanh khoản): ${stock.gtgd} tỷ\n`;
 
-      if (stockType === 'TO') {
-        const s = stock as TOStock;
+      if (toStock) {
         info += `\n--- CHỈ SỐ KỸ THUẬT (TO) ---\n`;
-        info += `State: ${s.state}\n`;
-        info += `Trend Path: ${s.tpaths}\n`;
-        info += `MTF Sync: ${s.mtf}\n`;
-        info += `QTier: ${s.qtier}\n`;
-        info += `MI Phase: ${s.miph}\n`;
-        info += `MI (Momentum): ${s.mi}\n`;
-        info += `Rank: ${s.rank}\n`;
-        info += `Vol Ratio: ${s.volRatio?.toFixed(2) ?? 'N/A'}\n`;
-        info += `RQS (Retest Quality): ${s.rqs?.toFixed(1) ?? 'N/A'}\n`;
-      } else {
-        const s = stock as RSStock;
+        info += `State: ${toStock.state}\n`;
+        info += `Trend Path: ${toStock.tpaths}\n`;
+        info += `MTF Sync: ${toStock.mtf}\n`;
+        info += `QTier: ${toStock.qtier}\n`;
+        info += `MI Phase: ${toStock.miph}\n`;
+        info += `MI (Momentum): ${toStock.mi}\n`;
+        info += `Rank: ${toStock.rank}\n`;
+        info += `Vol Ratio: ${toStock.volRatio?.toFixed(2) ?? 'N/A'}\n`;
+        info += `RQS (Retest Quality): ${toStock.rqs?.toFixed(1) ?? 'N/A'}\n`;
+      }
+      if (rsStock) {
         info += `\n--- CHỈ SỐ RS (Relative Strength) ---\n`;
-        info += `RS State: ${s.rsState}\n`;
-        info += `Vector: ${s.vector}\n`;
-        info += `Bucket: ${s.bucket}\n`;
-        info += `RS%: ${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%\n`;
-        info += `Score: ${s.score}\n`;
+        info += `RS State: ${rsStock.rsState}\n`;
+        info += `Vector: ${rsStock.vector}\n`;
+        info += `Bucket: ${rsStock.bucket}\n`;
+        info += `RS%: ${rsStock.rsPct >= 0 ? '+' : ''}${rsStock.rsPct.toFixed(1)}%\n`;
+        info += `Score: ${rsStock.score}\n`;
       }
 
       info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
@@ -1020,6 +1059,13 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
           info += `\n\n--- THÔNG TIN CÔNG TY ---\n`;
           info += `Ngành: ${companyExtra.overview.industry}\n`;
           if (companyExtra.overview.profile) info += `Mô tả: ${companyExtra.overview.profile.slice(0, 300)}\n`;
+        }
+        if (companyExtra.ownership.length > 0) {
+          info += `\n--- CƠ CẤU SỞ HỮU ---\n`;
+          companyExtra.ownership.forEach(o => {
+            info += `${o.ownerType}: ${o.ownershipPct.toFixed(2)}%\n`;
+          });
+          if (companyExtra.freefloatPct !== null) info += `Freefloat: ${companyExtra.freefloatPct.toFixed(2)}%\n`;
         }
         if (companyExtra.shareholders.length > 0) {
           info += `\n--- CỔ ĐÔNG LỚN ---\n`;
@@ -1138,7 +1184,9 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
                 </span>
               </h3>
               <p className="text-xs text-zinc-500">
-                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`}
+                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ
+                {toStock && ` | State: ${toStock.state}`}
+                {rsStock && ` | RS: ${rsStock.rsState}`}
               </p>
             </div>
           </div>
@@ -1168,35 +1216,37 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
             </div>
           )}
 
-          {/* Technical Data */}
-          <DataSection title={stockType === 'TO' ? 'Chỉ số kỹ thuật (TO) — bấm chỉ số để xem giải thích' : 'Chỉ số RS — bấm chỉ số để xem giải thích'} defaultOpen={true}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 px-1 text-xs">
-              {stockType === 'TO' ? (() => {
-                const s = stock as TOStock;
-                return <>
-                  <MetricItem label="State" value={s.state} explanations={TO_EXPLANATIONS.State} />
-                  <MetricItem label="Trend Path" value={s.tpaths} explanations={TO_EXPLANATIONS['Trend Path']} />
-                  <MetricItem label="MTF Sync" value={s.mtf} explanations={TO_EXPLANATIONS['MTF Sync']} />
-                  <MetricItem label="QTier" value={s.qtier} explanations={TO_EXPLANATIONS.QTier} />
-                  <MetricItem label="MI Phase" value={s.miph} explanations={TO_EXPLANATIONS['MI Phase']} />
-                  <MetricItem label="MI" value={s.mi} explanations={TO_EXPLANATIONS.MI} />
-                  <MetricItem label="Rank" value={s.rank} explanations={TO_EXPLANATIONS.Rank} />
-                  <MetricItem label="Vol Ratio" value={s.volRatio?.toFixed(2) ?? 'N/A'} explanations={TO_EXPLANATIONS['Vol Ratio']} />
-                  <MetricItem label="RQS" value={s.rqs?.toFixed(1) ?? 'N/A'} explanations={TO_EXPLANATIONS.RQS} />
-                </>;
-              })() : (() => {
-                const s = stock as RSStock;
-                return <>
-                  <MetricItem label="RS State" value={s.rsState} explanations={RS_EXPLANATIONS['RS State']} />
-                  <MetricItem label="Vector" value={s.vector} explanations={RS_EXPLANATIONS.Vector} />
-                  <MetricItem label="Bucket" value={s.bucket} explanations={RS_EXPLANATIONS.Bucket} />
-                  <MetricItem label="RS%" value={`${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%`} explanations={RS_EXPLANATIONS['RS%']} />
-                  <MetricItem label="Score" value={s.score} explanations={RS_EXPLANATIONS.Score} />
-                </>;
-              })()}
-              <MetricItem label="Regime" value={regime.regime} explanations={REGIME_EXPLANATION} />
-            </div>
-          </DataSection>
+          {/* Technical Data - TO */}
+          {toStock && (
+            <DataSection title="Chỉ số kỹ thuật (TO) — bấm chỉ số để xem giải thích" defaultOpen={true}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 px-1 text-xs">
+                <MetricItem label="State" value={toStock.state} explanations={TO_EXPLANATIONS.State} />
+                <MetricItem label="Trend Path" value={toStock.tpaths} explanations={TO_EXPLANATIONS['Trend Path']} />
+                <MetricItem label="MTF Sync" value={toStock.mtf} explanations={TO_EXPLANATIONS['MTF Sync']} />
+                <MetricItem label="QTier" value={toStock.qtier} explanations={TO_EXPLANATIONS.QTier} />
+                <MetricItem label="MI Phase" value={toStock.miph} explanations={TO_EXPLANATIONS['MI Phase']} />
+                <MetricItem label="MI" value={toStock.mi} explanations={TO_EXPLANATIONS.MI} />
+                <MetricItem label="Rank" value={toStock.rank} explanations={TO_EXPLANATIONS.Rank} />
+                <MetricItem label="Vol Ratio" value={toStock.volRatio?.toFixed(2) ?? 'N/A'} explanations={TO_EXPLANATIONS['Vol Ratio']} />
+                <MetricItem label="RQS" value={toStock.rqs?.toFixed(1) ?? 'N/A'} explanations={TO_EXPLANATIONS.RQS} />
+                <MetricItem label="Regime" value={regime.regime} explanations={REGIME_EXPLANATION} />
+              </div>
+            </DataSection>
+          )}
+
+          {/* Technical Data - RS */}
+          {rsStock && (
+            <DataSection title="Chỉ số RS (Relative Strength) — bấm chỉ số để xem giải thích" defaultOpen={true}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 px-1 text-xs">
+                <MetricItem label="RS State" value={rsStock.rsState} explanations={RS_EXPLANATIONS['RS State']} />
+                <MetricItem label="Vector" value={rsStock.vector} explanations={RS_EXPLANATIONS.Vector} />
+                <MetricItem label="Bucket" value={rsStock.bucket} explanations={RS_EXPLANATIONS.Bucket} />
+                <MetricItem label="RS%" value={`${rsStock.rsPct >= 0 ? '+' : ''}${rsStock.rsPct.toFixed(1)}%`} explanations={RS_EXPLANATIONS['RS%']} />
+                <MetricItem label="Score" value={rsStock.score} explanations={RS_EXPLANATIONS.Score} />
+                {!toStock && <MetricItem label="Regime" value={regime.regime} explanations={REGIME_EXPLANATION} />}
+              </div>
+            </DataSection>
+          )}
 
           {/* Financial Data */}
           {finLoading && (
@@ -1305,31 +1355,54 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }
                 </DataSection>
               )}
 
-              {/* Shareholders */}
-              {companyExtra.shareholders.length > 0 && (
-                <DataSection title={`Cổ đông lớn (${companyExtra.shareholders.length})`}>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-zinc-800">
-                          <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
-                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Số CP</th>
-                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Tỷ lệ</th>
-                          <th className="px-2 py-1 text-right text-zinc-500 font-normal">Cập nhật</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {companyExtra.shareholders.map((s, i) => (
-                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
-                            <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
-                            <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.sharesOwned}</td>
-                            <td className="px-2 py-1 text-right font-mono text-amber-400 font-bold">{s.ownershipPct}</td>
-                            <td className="px-2 py-1 text-right text-zinc-500">{s.updateDate}</td>
-                          </tr>
+              {/* Ownership Structure + Freefloat + Shareholders */}
+              {(companyExtra.ownership.length > 0 || companyExtra.shareholders.length > 0) && (
+                <DataSection title={`Cơ cấu sở hữu & Cổ đông${companyExtra.freefloatPct !== null ? ` — Freefloat: ${companyExtra.freefloatPct.toFixed(1)}%` : ''}`}>
+                  {/* Ownership breakdown */}
+                  {companyExtra.ownership.length > 0 && (
+                    <div className="mb-3">
+                      <div className="flex flex-wrap gap-2 px-2 mb-2">
+                        {companyExtra.ownership.map((o, i) => (
+                          <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/60 border border-zinc-700/50">
+                            <span className="text-[11px] text-zinc-400">{o.ownerType}</span>
+                            <span className="text-[11px] font-mono font-bold text-zinc-200">{o.ownershipPct.toFixed(1)}%</span>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        {companyExtra.freefloatPct !== null && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-green-500/10 border border-green-500/30">
+                            <span className="text-[11px] text-green-400">Freefloat</span>
+                            <span className="text-[11px] font-mono font-bold text-green-300">{companyExtra.freefloatPct.toFixed(1)}%</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {/* Shareholders table */}
+                  {companyExtra.shareholders.length > 0 && (
+                    <div className="overflow-x-auto">
+                      <div className="px-2 pb-1 text-[11px] text-zinc-500 font-medium">Cổ đông lớn ({companyExtra.shareholders.length})</div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-zinc-800">
+                            <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
+                            <th className="px-2 py-1 text-right text-zinc-500 font-normal">Số CP</th>
+                            <th className="px-2 py-1 text-right text-zinc-500 font-normal">Tỷ lệ</th>
+                            <th className="px-2 py-1 text-right text-zinc-500 font-normal">Cập nhật</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {companyExtra.shareholders.map((s, i) => (
+                            <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                              <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
+                              <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.sharesOwned}</td>
+                              <td className="px-2 py-1 text-right font-mono text-amber-400 font-bold">{s.ownershipPct}</td>
+                              <td className="px-2 py-1 text-right text-zinc-500">{s.updateDate}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </DataSection>
               )}
 
@@ -3412,6 +3485,8 @@ export function StockAnalysis() {
           regime={data.regime}
           onClose={closeModal}
           companyNameMap={companyNameMap}
+          toStocks={data.toStocks}
+          rsStocks={data.rsStocks}
         />
       )}
     </div>
