@@ -20,9 +20,10 @@ import {
   Briefcase,
   Plus,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import {
   runFullAnalysis,
   TO_TIERS,
@@ -201,9 +202,373 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
   );
 }
 
+// ==================== STOCK AI DETAIL MODAL ====================
+
+const STOCK_AI_PROMPT = `Bạn là chuyên gia phân tích chứng khoán Việt Nam (cả kỹ thuật lẫn cơ bản). Nhiệm vụ: phân tích TOÀN DIỆN 1 mã cổ phiếu dựa trên dữ liệu kỹ thuật VÀ báo cáo tài chính được cung cấp.
+
+Yêu cầu output (BẮT BUỘC theo thứ tự):
+1. **TỔNG QUAN** — Mã đang ở trạng thái gì, xu hướng ra sao, chất lượng cơ bản tốt/xấu (2-3 câu)
+2. **PHÂN TÍCH KỸ THUẬT** — State, Trend Path, MTF, QTier, MI Phase, Momentum — giải thích ý nghĩa
+3. **PHÂN TÍCH CƠ BẢN** — Doanh thu, lợi nhuận, biên lợi nhuận, ROE, ROA, nợ/vốn, dòng tiền — xu hướng tăng trưởng qua các năm/quý. So sánh P/E, P/B với ngành nếu có thể.
+4. **ĐIỂM MẠNH & ĐIỂM YẾU** — Tổng hợp từ cả kỹ thuật và cơ bản
+5. **ĐỊNH GIÁ** — Cổ phiếu đang rẻ/đắt/hợp lý dựa trên P/E, P/B, EPS growth
+6. **VÙNG GIÁ QUAN TRỌNG** — Hỗ trợ, kháng cự, vùng mua lý tưởng
+7. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do
+8. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
+
+Phong cách: ngắn gọn, bullet points, HÀNH ĐỘNG cụ thể. Viết bằng tiếng Việt.
+Nếu không có dữ liệu tài chính, chỉ phân tích kỹ thuật.
+Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không phải khuyến nghị đầu tư chính thức."`;
+
+// ==================== FETCH FINANCIAL DATA ====================
+
+const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/dmanh-ai/vnstock/main/data';
+
+interface FinancialData {
+  incomeStatement: string;
+  balanceSheet: string;
+  cashFlow: string;
+  ratios: string;
+  ratiosExtra: string;
+}
+
+async function fetchFinancialCSV(url: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch {
+    return '';
+  }
+}
+
+function parseCSVToSummary(csv: string, label: string, maxCols?: number): string {
+  if (!csv) return '';
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return '';
+
+  // Parse header to get period columns
+  const header = lines[0].split(',');
+  const periodCols = header.slice(2, maxCols ? 2 + maxCols : undefined); // skip item, item_en
+  let out = `\n--- ${label} (${periodCols.join(' | ')}) ---\n`;
+
+  for (let i = 1; i < lines.length; i++) {
+    // Handle CSV with possible commas in quoted fields
+    const row = lines[i];
+    const parts: string[] = [];
+    let inQuote = false;
+    let current = '';
+    for (const ch of row) {
+      if (ch === '"') { inQuote = !inQuote; continue; }
+      if (ch === ',' && !inQuote) { parts.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    parts.push(current.trim());
+
+    const itemEn = parts[1] || parts[0] || '';
+    if (!itemEn) continue;
+    const values = parts.slice(2, maxCols ? 2 + maxCols : undefined);
+    // Format large numbers to billions
+    const formatted = values.map(v => {
+      const n = parseFloat(v);
+      if (isNaN(n)) return v || '-';
+      if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    out += `${itemEn}: ${formatted.join(' | ')}\n`;
+  }
+  return out;
+}
+
+function parseRatiosExtraToSummary(csv: string): string {
+  if (!csv) return '';
+  const lines = csv.trim().split('\n');
+  if (lines.length < 3) return '';
+
+  // Row 0: category headers, Row 1: column names, Row 2+: data
+  const colNames = lines[1].split(',');
+  // Get annual rows only (lengthReport=5) — latest 4
+  const dataRows = lines.slice(2)
+    .map(line => line.split(','))
+    .filter(parts => parts[2]?.trim() === '5') // annual only
+    .slice(-4); // latest 4 years
+
+  if (dataRows.length === 0) return '';
+
+  const years = dataRows.map(r => r[1]?.trim() || '?');
+  let out = `\n--- CHỈ SỐ TÀI CHÍNH MỞ RỘNG (${years.join(' | ')}) ---\n`;
+
+  // Key metrics to show (column index -> label)
+  const keyMetrics = [
+    [4, 'Debt/Equity'], [7, 'Asset Turnover'], [9, 'Days Sales Outstanding'],
+    [10, 'Days Inventory Outstanding'], [12, 'Cash Cycle'], [14, 'EBIT Margin (%)'],
+    [15, 'Gross Profit Margin (%)'], [16, 'Net Profit Margin (%)'],
+    [17, 'ROE (%)'], [18, 'ROIC (%)'], [19, 'ROA (%)'],
+    [23, 'Current Ratio'], [26, 'Interest Coverage'],
+    [28, 'Market Cap (Bn VND)'], [30, 'P/E'], [31, 'P/B'], [32, 'P/S'],
+    [34, 'EPS (VND)'], [35, 'BVPS (VND)'], [36, 'EV/EBITDA'],
+  ] as const;
+
+  for (const [idx, label] of keyMetrics) {
+    if (idx >= colNames.length) continue;
+    const values = dataRows.map(r => {
+      const v = r[idx]?.trim();
+      if (!v || v === '') return '-';
+      const n = parseFloat(v);
+      if (isNaN(n)) return v;
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    out += `${label}: ${values.join(' | ')}\n`;
+  }
+  return out;
+}
+
+async function fetchStockFinancials(symbol: string, signal?: AbortSignal): Promise<string> {
+  const urls = {
+    income: `${GITHUB_RAW_BASE}/financials/${symbol}/income_statement_year.csv`,
+    balance: `${GITHUB_RAW_BASE}/financials/${symbol}/balance_sheet_year.csv`,
+    cashflow: `${GITHUB_RAW_BASE}/financials/${symbol}/cash_flow_year.csv`,
+    ratio: `${GITHUB_RAW_BASE}/financials/${symbol}/ratio_year.csv`,
+    extra: `${GITHUB_RAW_BASE}/financials_extra/ratios_detail/${symbol}.csv`,
+  };
+
+  // Fetch all in parallel
+  const [income, balance, cashflow, ratio, extra] = await Promise.all([
+    fetchFinancialCSV(urls.income, signal),
+    fetchFinancialCSV(urls.balance, signal),
+    fetchFinancialCSV(urls.cashflow, signal),
+    fetchFinancialCSV(urls.ratio, signal),
+    fetchFinancialCSV(urls.extra, signal),
+  ]);
+
+  let summary = '';
+  if (income || balance || cashflow || ratio || extra) {
+    summary += `\n\n========== PHÂN TÍCH CƠ BẢN ==========\n`;
+  }
+
+  summary += parseCSVToSummary(income, 'BÁO CÁO KẾT QUẢ KINH DOANH (NĂM)', 4);
+  summary += parseCSVToSummary(ratio, 'TỶ SỐ TÀI CHÍNH (NĂM)', 4);
+  summary += parseCSVToSummary(balance, 'BẢNG CÂN ĐỐI KẾ TOÁN (NĂM)', 4);
+  summary += parseCSVToSummary(cashflow, 'BÁO CÁO LƯU CHUYỂN TIỀN TỆ (NĂM)', 4);
+  summary += parseRatiosExtraToSummary(extra);
+
+  if (!summary.trim()) {
+    summary = '\n(Không tìm thấy dữ liệu tài chính cho mã này)\n';
+  }
+
+  return summary;
+}
+
+interface StockAIModalProps {
+  stock: TOStock | RSStock | null;
+  stockType: 'TO' | 'RS';
+  regime: MarketRegime;
+  onClose: () => void;
+}
+
+function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) {
+  const [analysis, setAnalysis] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll as content streams
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [analysis]);
+
+  // Auto-analyze on open
+  useEffect(() => {
+    if (!stock) return;
+    const apiKey = localStorage.getItem('anthropic_api_key');
+    if (!apiKey) {
+      setError('Chưa có API Key. Vui lòng nhập ở tab "AI Khuyến nghị" trước.');
+      return;
+    }
+
+    const analyze = async () => {
+      setIsLoading(true);
+      setError(null);
+      setAnalysis('');
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        let info = `=== PHÂN TÍCH CỔ PHIẾU: ${stock.symbol} ===\n`;
+        info += `Giá hiện tại: ${(stock.price * 1000).toLocaleString('vi-VN')} VNĐ\n`;
+        info += `Thay đổi hôm nay: ${stock.changePct >= 0 ? '+' : ''}${stock.changePct.toFixed(2)}%\n`;
+        info += `GTGD (thanh khoản): ${stock.gtgd} tỷ\n`;
+
+        if (stockType === 'TO') {
+          const s = stock as TOStock;
+          info += `\n--- CHỈ SỐ KỸ THUẬT (TO) ---\n`;
+          info += `State: ${s.state}\n`;
+          info += `Trend Path: ${s.tpaths}\n`;
+          info += `MTF Sync: ${s.mtf}\n`;
+          info += `QTier: ${s.qtier}\n`;
+          info += `MI Phase: ${s.miph}\n`;
+          info += `MI (Momentum): ${s.mi}\n`;
+          info += `Rank: ${s.rank}\n`;
+          info += `Vol Ratio: ${s.volRatio?.toFixed(2) ?? 'N/A'}\n`;
+          info += `RQS (Retest Quality): ${s.rqs?.toFixed(1) ?? 'N/A'}\n`;
+        } else {
+          const s = stock as RSStock;
+          info += `\n--- CHỈ SỐ RS (Relative Strength) ---\n`;
+          info += `RS State: ${s.rsState}\n`;
+          info += `Vector: ${s.vector}\n`;
+          info += `Bucket: ${s.bucket}\n`;
+          info += `RS%: ${s.rsPct >= 0 ? '+' : ''}${s.rsPct.toFixed(1)}%\n`;
+          info += `Score: ${s.score}\n`;
+        }
+
+        info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
+        info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
+
+        // Fetch fundamental data from GitHub
+        const financialSummary = await fetchStockFinancials(stock.symbol, controller.signal);
+        info += financialSummary;
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5-20250929',
+            max_tokens: 4096,
+            stream: true,
+            system: STOCK_AI_PROMPT,
+            messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let text = '';
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr || jsonStr === '[DONE]') continue;
+              try {
+                const event = JSON.parse(jsonStr);
+                if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                  text += event.delta.text;
+                  setAnalysis(text);
+                }
+              } catch { /* ignore */ }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Lỗi không xác định');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    analyze();
+
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [stock, stockType, regime]);
+
+  if (!stock) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      {/* Modal */}
+      <div
+        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <Sparkles className="w-5 h-5 text-amber-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+                {stock.symbol}
+                <span className={`text-sm font-normal ${stock.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {stock.changePct >= 0 ? '+' : ''}{stock.changePct.toFixed(2)}%
+                </span>
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`} | Kỹ thuật + Cơ bản
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4">
+          {error && (
+            <div className="rounded-lg border border-red-800 bg-red-900/20 p-3 mb-3">
+              <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+
+          {analysis ? (
+            <div>
+              <SimpleMarkdown text={analysis} />
+              {isLoading && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Đang phân tích...
+                </div>
+              )}
+            </div>
+          ) : isLoading ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mb-4" />
+              <p className="text-sm text-zinc-400">AI đang phân tích <strong className="text-zinc-200">{stock.symbol}</strong>...</p>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-600 text-center">
+          Phân tích bởi Claude AI — Chỉ mang tính tham khảo, không phải khuyến nghị đầu tư
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== TO TABLE ====================
 
-function TOTable({ stocks }: { stocks: TOStock[] }) {
+function TOTable({ stocks, onStockClick }: { stocks: TOStock[]; onStockClick?: (s: TOStock) => void }) {
   const [sortKey, setSortKey] = useState<TOSortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -238,7 +603,7 @@ function TOTable({ stocks }: { stocks: TOStock[] }) {
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
               <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
@@ -260,7 +625,7 @@ function TOTable({ stocks }: { stocks: TOStock[] }) {
 
 // ==================== RS TABLE ====================
 
-function RSTable({ stocks }: { stocks: RSStock[] }) {
+function RSTable({ stocks, onStockClick }: { stocks: RSStock[]; onStockClick?: (s: RSStock) => void }) {
   const [sortKey, setSortKey] = useState<RSSortKey>('score');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -293,7 +658,7 @@ function RSTable({ stocks }: { stocks: RSStock[] }) {
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
               <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
@@ -1774,7 +2139,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
 
 // ==================== SCREENER TAB ====================
 
-function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RSStock[] }) {
+function ScreenerTab({ toStocks, rsStocks, onStockClick }: { toStocks: TOStock[]; rsStocks: RSStock[]; onStockClick?: (s: TOStock) => void }) {
   const [filterState, setFilterState] = useState<State | 'ALL'>('ALL');
   const [filterQTier, setFilterQTier] = useState<QTier | 'ALL'>('ALL');
   const [filterTPath, setFilterTPath] = useState<TrendPath | 'ALL'>('ALL');
@@ -1854,7 +2219,7 @@ function ScreenerTab({ toStocks, rsStocks }: { toStocks: TOStock[]; rsStocks: RS
       </div>
 
       {/* Full stock table */}
-      <TOTable stocks={filtered} />
+      <TOTable stocks={filtered} onStockClick={onStockClick} />
     </div>
   );
 }
@@ -1868,6 +2233,13 @@ export function StockAnalysis() {
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
+
+  // Stock AI modal state
+  const [modalStock, setModalStock] = useState<TOStock | RSStock | null>(null);
+  const [modalStockType, setModalStockType] = useState<'TO' | 'RS'>('TO');
+  const openTOModal = useCallback((s: TOStock) => { setModalStock(s); setModalStockType('TO'); }, []);
+  const openRSModal = useCallback((s: RSStock) => { setModalStock(s); setModalStockType('RS'); }, []);
+  const closeModal = useCallback(() => setModalStock(null), []);
 
   return (
     <div className="space-y-5">
@@ -1981,7 +2353,7 @@ export function StockAnalysis() {
                 color={TIER_HEADER_COLORS[tier.key]}
                 defaultOpen={tier.key === 'tier1a' || tier.key === 'tier2a'}
               >
-                <TOTable stocks={data.toTiers[tier.key] || []} />
+                <TOTable stocks={data.toTiers[tier.key] || []} onStockClick={openTOModal} />
               </TierSection>
             ))}
           </TabsContent>
@@ -2007,14 +2379,14 @@ export function StockAnalysis() {
                 color={CAT_HEADER_COLORS[cat.key]}
                 defaultOpen={cat.key === 'sync_active'}
               >
-                <RSTable stocks={data.rsCats[cat.key] || []} />
+                <RSTable stocks={data.rsCats[cat.key] || []} onStockClick={openRSModal} />
               </TierSection>
             ))}
           </TabsContent>
 
           {/* ========= SCREENER TAB ========= */}
           <TabsContent value="screener" className="space-y-4">
-            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} />
+            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} onStockClick={openTOModal} />
           </TabsContent>
 
           {/* ========= PORTFOLIO TAB ========= */}
@@ -2031,6 +2403,16 @@ export function StockAnalysis() {
 
       {/* ========= GUIDE ========= */}
       <Guide />
+
+      {/* ========= STOCK AI MODAL ========= */}
+      {modalStock && data && (
+        <StockAIModal
+          stock={modalStock}
+          stockType={modalStockType}
+          regime={data.regime}
+          onClose={closeModal}
+        />
+      )}
     </div>
   );
 }
