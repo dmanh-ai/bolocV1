@@ -634,6 +634,7 @@ interface StockAIModalProps {
   stockType: 'TO' | 'RS';
   regime: MarketRegime;
   onClose: () => void;
+  companyNameMap?: Record<string, string>;
 }
 
 interface FinancialTables {
@@ -825,7 +826,54 @@ function parseOverviewCSV(csv: string, symbol: string): CompanyOverviewData | nu
   };
 }
 
-function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) {
+function parseCSVRow(line: string): string[] {
+  const fields: string[] = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '"') {
+      let val = '';
+      i++;
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') { val += '"'; i += 2; }
+        else if (line[i] === '"') { i++; break; }
+        else { val += line[i]; i++; }
+      }
+      fields.push(val);
+      if (line[i] === ',') i++;
+    } else {
+      const next = line.indexOf(',', i);
+      if (next === -1) { fields.push(line.slice(i)); break; }
+      fields.push(line.slice(i, next));
+      i = next + 1;
+    }
+  }
+  return fields;
+}
+
+function parseCompanyNameMap(csv: string): Record<string, string> {
+  if (!csv) return {};
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return {};
+  const headerLine = lines[0].replace(/^\uFEFF/, '');
+  const headers = parseCSVRow(headerLine).map(h => h.trim());
+  const symIdx = headers.findIndex(h => h === 'symbol');
+  const profIdx = headers.findIndex(h => h === 'company_profile');
+  if (symIdx === -1 || profIdx === -1) return {};
+  const map: Record<string, string> = {};
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCSVRow(lines[i]);
+    const sym = vals[symIdx]?.trim();
+    if (!sym || map[sym]) continue;
+    const profile = (vals[profIdx] || '').trim();
+    if (profile) {
+      const m = profile.match(/^(.+?)[\(,]/);
+      if (m) map[sym] = m[1].trim();
+    }
+  }
+  return map;
+}
+
+function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {} }: StockAIModalProps) {
   const [analysis, setAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1082,6 +1130,9 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
             <div>
               <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
                 {stock.symbol}
+                {companyNameMap[stock.symbol] && (
+                  <span className="text-sm font-normal text-zinc-400">— {companyNameMap[stock.symbol]}</span>
+                )}
                 <span className={`text-sm font-normal ${stock.changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {stock.changePct >= 0 ? '+' : ''}{stock.changePct.toFixed(2)}%
                 </span>
@@ -1401,7 +1452,7 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
 
 // ==================== TO TABLE ====================
 
-function TOTable({ stocks, onStockClick }: { stocks: TOStock[]; onStockClick?: (s: TOStock) => void }) {
+function TOTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: TOStock[]; onStockClick?: (s: TOStock) => void; companyNameMap?: Record<string, string> }) {
   const [sortKey, setSortKey] = useState<TOSortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -1437,7 +1488,12 @@ function TOTable({ stocks, onStockClick }: { stocks: TOStock[]; onStockClick?: (
         <tbody>
           {sorted.map((s) => (
             <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
-              <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
+              <td className="px-2 py-1.5">
+                <span className="font-bold text-zinc-100">{s.symbol}</span>
+                {companyNameMap[s.symbol] && (
+                  <span className="ml-1.5 text-[10px] text-zinc-500">{companyNameMap[s.symbol]}</span>
+                )}
+              </td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
@@ -1458,7 +1514,7 @@ function TOTable({ stocks, onStockClick }: { stocks: TOStock[]; onStockClick?: (
 
 // ==================== RS TABLE ====================
 
-function RSTable({ stocks, onStockClick }: { stocks: RSStock[]; onStockClick?: (s: RSStock) => void }) {
+function RSTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: RSStock[]; onStockClick?: (s: RSStock) => void; companyNameMap?: Record<string, string> }) {
   const [sortKey, setSortKey] = useState<RSSortKey>('score');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -1492,7 +1548,12 @@ function RSTable({ stocks, onStockClick }: { stocks: RSStock[]; onStockClick?: (
         <tbody>
           {sorted.map((s) => (
             <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
-              <td className="px-2 py-1.5 font-bold text-zinc-100">{s.symbol}</td>
+              <td className="px-2 py-1.5">
+                <span className="font-bold text-zinc-100">{s.symbol}</span>
+                {companyNameMap[s.symbol] && (
+                  <span className="ml-1.5 text-[10px] text-zinc-500">{companyNameMap[s.symbol]}</span>
+                )}
+              </td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
               <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
               <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
@@ -3067,7 +3128,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
 
 // ==================== SCREENER TAB ====================
 
-function ScreenerTab({ toStocks, rsStocks, onStockClick }: { toStocks: TOStock[]; rsStocks: RSStock[]; onStockClick?: (s: TOStock) => void }) {
+function ScreenerTab({ toStocks, rsStocks, onStockClick, companyNameMap = {} }: { toStocks: TOStock[]; rsStocks: RSStock[]; onStockClick?: (s: TOStock) => void; companyNameMap?: Record<string, string> }) {
   const [filterState, setFilterState] = useState<State | 'ALL'>('ALL');
   const [filterQTier, setFilterQTier] = useState<QTier | 'ALL'>('ALL');
   const [filterTPath, setFilterTPath] = useState<TrendPath | 'ALL'>('ALL');
@@ -3147,7 +3208,7 @@ function ScreenerTab({ toStocks, rsStocks, onStockClick }: { toStocks: TOStock[]
       </div>
 
       {/* Full stock table */}
-      <TOTable stocks={filtered} onStockClick={onStockClick} />
+      <TOTable stocks={filtered} onStockClick={onStockClick} companyNameMap={companyNameMap} />
     </div>
   );
 }
@@ -3161,6 +3222,14 @@ export function StockAnalysis() {
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
+
+  // Company name map: symbol -> company name
+  const [companyNameMap, setCompanyNameMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    fetchFinancialCSV(`${GITHUB_RAW_BASE}/company_overview.csv`)
+      .then(csv => setCompanyNameMap(parseCompanyNameMap(csv)))
+      .catch(() => {});
+  }, []);
 
   // Stock AI modal state
   const [modalStock, setModalStock] = useState<TOStock | RSStock | null>(null);
@@ -3283,7 +3352,7 @@ export function StockAnalysis() {
                 color={TIER_HEADER_COLORS[tier.key]}
                 defaultOpen={tier.key === 'tier1a' || tier.key === 'tier2a'}
               >
-                <TOTable stocks={data.toTiers[tier.key] || []} onStockClick={openTOModal} />
+                <TOTable stocks={data.toTiers[tier.key] || []} onStockClick={openTOModal} companyNameMap={companyNameMap} />
               </TierSection>
             ))}
           </TabsContent>
@@ -3310,14 +3379,14 @@ export function StockAnalysis() {
                 color={CAT_HEADER_COLORS[cat.key]}
                 defaultOpen={cat.key === 'sync_active'}
               >
-                <RSTable stocks={data.rsCats[cat.key] || []} onStockClick={openRSModal} />
+                <RSTable stocks={data.rsCats[cat.key] || []} onStockClick={openRSModal} companyNameMap={companyNameMap} />
               </TierSection>
             ))}
           </TabsContent>
 
           {/* ========= SCREENER TAB ========= */}
           <TabsContent value="screener" className="space-y-4">
-            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} onStockClick={openTOModal} />
+            <ScreenerTab toStocks={data.toStocks} rsStocks={data.rsStocks} onStockClick={openTOModal} companyNameMap={companyNameMap} />
           </TabsContent>
 
           {/* ========= PORTFOLIO TAB ========= */}
@@ -3342,6 +3411,7 @@ export function StockAnalysis() {
           stockType={modalStockType}
           regime={data.regime}
           onClose={closeModal}
+          companyNameMap={companyNameMap}
         />
       )}
     </div>
