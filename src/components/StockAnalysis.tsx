@@ -204,18 +204,162 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
 
 // ==================== STOCK AI DETAIL MODAL ====================
 
-const STOCK_AI_PROMPT = `Bạn là chuyên gia phân tích kỹ thuật chứng khoán Việt Nam. Nhiệm vụ: phân tích CHI TIẾT 1 mã cổ phiếu dựa trên dữ liệu kỹ thuật được cung cấp.
+const STOCK_AI_PROMPT = `Bạn là chuyên gia phân tích chứng khoán Việt Nam (cả kỹ thuật lẫn cơ bản). Nhiệm vụ: phân tích TOÀN DIỆN 1 mã cổ phiếu dựa trên dữ liệu kỹ thuật VÀ báo cáo tài chính được cung cấp.
 
 Yêu cầu output (BẮT BUỘC theo thứ tự):
-1. **TỔNG QUAN** — Mã đang ở trạng thái gì, xu hướng ra sao (2-3 câu)
-2. **PHÂN TÍCH KỸ THUẬT** — State, Trend Path, MTF, QTier, MI Phase, Momentum — giải thích ý nghĩa từng chỉ số
-3. **VÙNG GIÁ QUAN TRỌNG** — Hỗ trợ, kháng cự, vùng mua lý tưởng
-4. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do cụ thể
-5. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
-6. **RỦI RO** — Các yếu tố cần lưu ý
+1. **TỔNG QUAN** — Mã đang ở trạng thái gì, xu hướng ra sao, chất lượng cơ bản tốt/xấu (2-3 câu)
+2. **PHÂN TÍCH KỸ THUẬT** — State, Trend Path, MTF, QTier, MI Phase, Momentum — giải thích ý nghĩa
+3. **PHÂN TÍCH CƠ BẢN** — Doanh thu, lợi nhuận, biên lợi nhuận, ROE, ROA, nợ/vốn, dòng tiền — xu hướng tăng trưởng qua các năm/quý. So sánh P/E, P/B với ngành nếu có thể.
+4. **ĐIỂM MẠNH & ĐIỂM YẾU** — Tổng hợp từ cả kỹ thuật và cơ bản
+5. **ĐỊNH GIÁ** — Cổ phiếu đang rẻ/đắt/hợp lý dựa trên P/E, P/B, EPS growth
+6. **VÙNG GIÁ QUAN TRỌNG** — Hỗ trợ, kháng cự, vùng mua lý tưởng
+7. **KHUYẾN NGHỊ** — MUA / GIỮ / BÁN / CHỜ — kèm lý do
+8. **CHIẾN LƯỢC** — Entry price, Stop-loss, Target price (nếu mua)
 
 Phong cách: ngắn gọn, bullet points, HÀNH ĐỘNG cụ thể. Viết bằng tiếng Việt.
+Nếu không có dữ liệu tài chính, chỉ phân tích kỹ thuật.
 Disclaimer cuối: "Lưu ý: Đây là phân tích tham khảo từ AI, không phải khuyến nghị đầu tư chính thức."`;
+
+// ==================== FETCH FINANCIAL DATA ====================
+
+const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/dmanh-ai/vnstock/main/data';
+
+interface FinancialData {
+  incomeStatement: string;
+  balanceSheet: string;
+  cashFlow: string;
+  ratios: string;
+  ratiosExtra: string;
+}
+
+async function fetchFinancialCSV(url: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch {
+    return '';
+  }
+}
+
+function parseCSVToSummary(csv: string, label: string, maxCols?: number): string {
+  if (!csv) return '';
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return '';
+
+  // Parse header to get period columns
+  const header = lines[0].split(',');
+  const periodCols = header.slice(2, maxCols ? 2 + maxCols : undefined); // skip item, item_en
+  let out = `\n--- ${label} (${periodCols.join(' | ')}) ---\n`;
+
+  for (let i = 1; i < lines.length; i++) {
+    // Handle CSV with possible commas in quoted fields
+    const row = lines[i];
+    const parts: string[] = [];
+    let inQuote = false;
+    let current = '';
+    for (const ch of row) {
+      if (ch === '"') { inQuote = !inQuote; continue; }
+      if (ch === ',' && !inQuote) { parts.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    parts.push(current.trim());
+
+    const itemEn = parts[1] || parts[0] || '';
+    if (!itemEn) continue;
+    const values = parts.slice(2, maxCols ? 2 + maxCols : undefined);
+    // Format large numbers to billions
+    const formatted = values.map(v => {
+      const n = parseFloat(v);
+      if (isNaN(n)) return v || '-';
+      if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    out += `${itemEn}: ${formatted.join(' | ')}\n`;
+  }
+  return out;
+}
+
+function parseRatiosExtraToSummary(csv: string): string {
+  if (!csv) return '';
+  const lines = csv.trim().split('\n');
+  if (lines.length < 3) return '';
+
+  // Row 0: category headers, Row 1: column names, Row 2+: data
+  const colNames = lines[1].split(',');
+  // Get annual rows only (lengthReport=5) — latest 4
+  const dataRows = lines.slice(2)
+    .map(line => line.split(','))
+    .filter(parts => parts[2]?.trim() === '5') // annual only
+    .slice(-4); // latest 4 years
+
+  if (dataRows.length === 0) return '';
+
+  const years = dataRows.map(r => r[1]?.trim() || '?');
+  let out = `\n--- CHỈ SỐ TÀI CHÍNH MỞ RỘNG (${years.join(' | ')}) ---\n`;
+
+  // Key metrics to show (column index -> label)
+  const keyMetrics = [
+    [4, 'Debt/Equity'], [7, 'Asset Turnover'], [9, 'Days Sales Outstanding'],
+    [10, 'Days Inventory Outstanding'], [12, 'Cash Cycle'], [14, 'EBIT Margin (%)'],
+    [15, 'Gross Profit Margin (%)'], [16, 'Net Profit Margin (%)'],
+    [17, 'ROE (%)'], [18, 'ROIC (%)'], [19, 'ROA (%)'],
+    [23, 'Current Ratio'], [26, 'Interest Coverage'],
+    [28, 'Market Cap (Bn VND)'], [30, 'P/E'], [31, 'P/B'], [32, 'P/S'],
+    [34, 'EPS (VND)'], [35, 'BVPS (VND)'], [36, 'EV/EBITDA'],
+  ] as const;
+
+  for (const [idx, label] of keyMetrics) {
+    if (idx >= colNames.length) continue;
+    const values = dataRows.map(r => {
+      const v = r[idx]?.trim();
+      if (!v || v === '') return '-';
+      const n = parseFloat(v);
+      if (isNaN(n)) return v;
+      return n % 1 === 0 ? n.toString() : n.toFixed(2);
+    });
+    out += `${label}: ${values.join(' | ')}\n`;
+  }
+  return out;
+}
+
+async function fetchStockFinancials(symbol: string, signal?: AbortSignal): Promise<string> {
+  const urls = {
+    income: `${GITHUB_RAW_BASE}/financials/${symbol}/income_statement_year.csv`,
+    balance: `${GITHUB_RAW_BASE}/financials/${symbol}/balance_sheet_year.csv`,
+    cashflow: `${GITHUB_RAW_BASE}/financials/${symbol}/cash_flow_year.csv`,
+    ratio: `${GITHUB_RAW_BASE}/financials/${symbol}/ratio_year.csv`,
+    extra: `${GITHUB_RAW_BASE}/financials_extra/ratios_detail/${symbol}.csv`,
+  };
+
+  // Fetch all in parallel
+  const [income, balance, cashflow, ratio, extra] = await Promise.all([
+    fetchFinancialCSV(urls.income, signal),
+    fetchFinancialCSV(urls.balance, signal),
+    fetchFinancialCSV(urls.cashflow, signal),
+    fetchFinancialCSV(urls.ratio, signal),
+    fetchFinancialCSV(urls.extra, signal),
+  ]);
+
+  let summary = '';
+  if (income || balance || cashflow || ratio || extra) {
+    summary += `\n\n========== PHÂN TÍCH CƠ BẢN ==========\n`;
+  }
+
+  summary += parseCSVToSummary(income, 'BÁO CÁO KẾT QUẢ KINH DOANH (NĂM)', 4);
+  summary += parseCSVToSummary(ratio, 'TỶ SỐ TÀI CHÍNH (NĂM)', 4);
+  summary += parseCSVToSummary(balance, 'BẢNG CÂN ĐỐI KẾ TOÁN (NĂM)', 4);
+  summary += parseCSVToSummary(cashflow, 'BÁO CÁO LƯU CHUYỂN TIỀN TỆ (NĂM)', 4);
+  summary += parseRatiosExtraToSummary(extra);
+
+  if (!summary.trim()) {
+    summary = '\n(Không tìm thấy dữ liệu tài chính cho mã này)\n';
+  }
+
+  return summary;
+}
 
 interface StockAIModalProps {
   stock: TOStock | RSStock | null;
@@ -286,6 +430,10 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
         info += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
         info += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
 
+        // Fetch fundamental data from GitHub
+        const financialSummary = await fetchStockFinancials(stock.symbol, controller.signal);
+        info += financialSummary;
+
         const response = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
@@ -296,10 +444,10 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
           },
           body: JSON.stringify({
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 2048,
+            max_tokens: 4096,
             stream: true,
             system: STOCK_AI_PROMPT,
-            messages: [{ role: 'user', content: `Phân tích chi tiết mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
+            messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
           }),
           signal: controller.signal,
         });
@@ -374,7 +522,7 @@ function StockAIModal({ stock, stockType, regime, onClose }: StockAIModalProps) 
                 </span>
               </h3>
               <p className="text-xs text-zinc-500">
-                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`}
+                Giá: {(stock.price * 1000).toLocaleString('vi-VN')} VNĐ | GTGD: {stock.gtgd} tỷ | {stockType === 'TO' ? `State: ${(stock as TOStock).state}` : `RS: ${(stock as RSStock).rsState}`} | Kỹ thuật + Cơ bản
               </p>
             </div>
           </div>
