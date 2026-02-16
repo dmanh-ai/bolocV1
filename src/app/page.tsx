@@ -10,20 +10,21 @@ export default function VNSniperPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Minimal Header */}
-      <header className="sticky top-0 z-30 h-14 bg-background/80 backdrop-blur border-b border-border">
-        <div className="flex items-center justify-between h-full px-4 lg:px-6">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
+      {/* Glass Header */}
+      <header className="sticky top-0 z-30 h-14 glass-surface border-b-0">
+        <div className="flex items-center justify-between h-full px-4 lg:px-6 max-w-[1400px] mx-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
               <Crosshair className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold text-lg bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
+            <span className="font-extrabold text-xl text-gradient-blue tracking-tight">
               VN Sniper
             </span>
           </div>
           <Button
             variant="ghost"
             size="icon"
+            className="rounded-2xl w-10 h-10 glass-inset hover:scale-105 transition-transform"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           >
             {theme === "dark" ? (
@@ -35,7 +36,7 @@ export default function VNSniperPage() {
         </div>
       </header>
 
-      {/* Main Content - Analysis only */}
+      {/* Main Content */}
       <main className="p-4 lg:p-6 max-w-[1400px] mx-auto">
         <StockAnalysis />
       </main>

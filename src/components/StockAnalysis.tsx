@@ -158,7 +158,7 @@ function sortRSStocks(stocks: RSStock[], key: RSSortKey, dir: SortDir): RSStock[
 
 function CellBadge({ value, colorMap }: { value: string; colorMap: Record<string, string> }) {
   return (
-    <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold leading-tight ${colorMap[value] || 'bg-zinc-700 text-zinc-300'}`}>
+    <span className={`inline-block px-2 py-0.5 rounded-lg text-[11px] font-extrabold leading-tight ${colorMap[value] || 'bg-white/10 text-zinc-300'}`}>
       {value}
     </span>
   );
@@ -173,7 +173,7 @@ function MIBar({ value }: { value: number }) {
   const color = value >= 70 ? 'bg-green-500' : value >= 50 ? 'bg-emerald-500' : value >= 30 ? 'bg-amber-500' : 'bg-red-500';
   return (
     <div className="flex items-center gap-1.5">
-      <div className="w-10 h-1.5 rounded-full bg-zinc-700 overflow-hidden">
+      <div className="w-10 h-1.5 rounded-full bg-white/10 overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
       </div>
       <span className="text-xs font-mono text-zinc-300">{value}</span>
@@ -191,7 +191,7 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
   const isActive = currentKey === sortKey;
   return (
     <th
-      className="px-2 py-2 text-left text-[11px] font-semibold text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap"
+      className="px-2 py-2.5 text-left text-[11px] font-extrabold text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap transition-colors"
       onClick={() => onSort(sortKey)}
     >
       {label}
@@ -200,114 +200,6 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
       )}
     </th>
   );
-}
-
-// ==================== AI PROVIDER ABSTRACTION (Claude + Gemini) ====================
-
-type AIProvider = 'anthropic' | 'gemini';
-
-function getAIProvider(): { provider: AIProvider; apiKey: string } {
-  // Priority 1: Anthropic key from localStorage
-  const anthropicKey = localStorage.getItem('anthropic_api_key');
-  if (anthropicKey) return { provider: 'anthropic', apiKey: anthropicKey };
-  // Priority 2: Gemini key from localStorage
-  const geminiKey = localStorage.getItem('gemini_api_key');
-  if (geminiKey) return { provider: 'gemini', apiKey: geminiKey };
-  // Priority 3: Gemini key from env (free default)
-  const envGeminiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-  if (envGeminiKey) return { provider: 'gemini', apiKey: envGeminiKey };
-  // No key available
-  return { provider: 'gemini', apiKey: '' };
-}
-
-async function streamAI(
-  systemPrompt: string,
-  userMessage: string,
-  onText: (fullText: string) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const { provider, apiKey } = getAIProvider();
-  if (!apiKey) {
-    throw new Error('Chưa có API Key. Nhập Gemini API Key (miễn phí) hoặc Anthropic API Key ở tab "AI Khuyến nghị".');
-  }
-
-  let response: Response;
-
-  if (provider === 'anthropic') {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
-        stream: true,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      }),
-      signal,
-    });
-  } else {
-    // Gemini 2.0 Flash (free tier: 15 RPM, 1500 RPD)
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
-          generationConfig: { maxOutputTokens: 4096 },
-        }),
-        signal,
-      },
-    );
-  }
-
-  if (!response.ok) {
-    const errText = await response.text();
-    const label = provider === 'anthropic' ? 'Claude' : 'Gemini';
-    throw new Error(`${label} API error ${response.status}: ${errText.slice(0, 300)}`);
-  }
-
-  // Parse SSE stream (both providers use data: prefix)
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let buf = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() || '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const jsonStr = line.slice(6).trim();
-      if (!jsonStr || jsonStr === '[DONE]') continue;
-      try {
-        const event = JSON.parse(jsonStr);
-        let chunk = '';
-        if (provider === 'anthropic') {
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            chunk = event.delta.text;
-          }
-        } else {
-          // Gemini format: candidates[0].content.parts[0].text
-          chunk = event?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        }
-        if (chunk) {
-          text += chunk;
-          onText(text);
-        }
-      } catch { /* ignore parse errors */ }
-    }
-  }
 }
 
 // ==================== STOCK AI DETAIL MODAL ====================
@@ -787,8 +679,8 @@ function MetricItem({ label, value, explanations }: {
     <div className="col-span-1">
       <button
         className={`flex justify-between w-full text-left rounded px-1.5 py-1 transition-colors ${
-          explanations ? 'hover:bg-zinc-800/60 cursor-pointer' : 'cursor-default'
-        } ${expanded ? 'bg-zinc-800/40' : ''}`}
+          explanations ? 'hover:bg-white/5/60 cursor-pointer' : 'cursor-default'
+        } ${expanded ? 'bg-white/5' : ''}`}
         onClick={() => explanations && setExpanded(e => !e)}
       >
         <span className="text-zinc-500 flex items-center gap-1">
@@ -798,7 +690,7 @@ function MetricItem({ label, value, explanations }: {
         <span className="text-zinc-200 font-medium">{strVal}</span>
       </button>
       {expanded && explanations && (
-        <div className="mt-0.5 mx-1.5 mb-1 px-2 py-1.5 rounded bg-zinc-800/60 border border-zinc-700/50 text-[11px] leading-relaxed text-zinc-400">
+        <div className="mt-0.5 mx-1.5 mb-1 px-2 py-1.5 rounded glass-inset text-[11px] leading-relaxed text-zinc-400">
           <p>{explanations.desc}</p>
           {valueExpl && (
             <p className="mt-1 text-zinc-300 font-medium">
@@ -817,7 +709,7 @@ function DataSection({ title, children, defaultOpen = false }: { title: string; 
   return (
     <div className="mb-2">
       <button
-        className="flex items-center gap-1.5 w-full text-left px-2 py-1.5 rounded-lg hover:bg-zinc-800/50 transition-colors text-sm font-semibold text-zinc-300"
+        className="flex items-center gap-1.5 w-full text-left px-2 py-1.5 rounded-lg hover:bg-white/5/50 transition-colors text-sm font-semibold text-zinc-300"
         onClick={() => setOpen(o => !o)}
       >
         {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -834,7 +726,7 @@ function FinTable({ data }: { data: TableData }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-zinc-800">
+          <tr className="border-b border-white/5">
             <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chỉ tiêu</th>
             {data.headers.map((h, i) => (
               <th key={i} className="px-2 py-1 text-right text-zinc-500 font-normal whitespace-nowrap">{h}</th>
@@ -843,7 +735,7 @@ function FinTable({ data }: { data: TableData }) {
         </thead>
         <tbody>
           {data.rows.map((row, i) => (
-            <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+            <tr key={i} className="border-b border-white/5/30 hover:bg-white/5/20">
               <td className="px-2 py-1 text-zinc-400 max-w-[200px] truncate" title={row.label}>{row.label}</td>
               {row.values.map((v, j) => (
                 <td key={j} className="px-2 py-1 text-right font-mono text-zinc-300 whitespace-nowrap">{v}</td>
@@ -1279,6 +1171,11 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
   // AI analysis — triggered by button
   const runAnalysis = useCallback(async () => {
     if (!stock) return;
+    const apiKey = localStorage.getItem('anthropic_api_key');
+    if (!apiKey) {
+      setError('Chưa có API Key. Vui lòng nhập ở tab "AI Khuyến nghị" trước.');
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -1393,12 +1290,54 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
         }
       } catch { /* ignore localStorage errors */ }
 
-      await streamAI(
-        STOCK_AI_PROMPT,
-        `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}`,
-        (t) => setAnalysis(t),
-        controller.signal,
-      );
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          stream: true,
+          system: STOCK_AI_PROMPT,
+          messages: [{ role: 'user', content: `Phân tích toàn diện (kỹ thuật + cơ bản) mã ${stock.symbol} dựa trên dữ liệu sau:\n\n${info}` }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API error ${response.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                text += event.delta.text;
+                setAnalysis(text);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Lỗi không xác định');
@@ -1419,14 +1358,14 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-md" />
       {/* Modal */}
       <div
-        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col glass-card shadow-2xl shadow-blue-500/10"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20">
               <BarChart3 className="w-5 h-5 text-blue-400" />
@@ -1460,7 +1399,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                 <><Sparkles className="w-3.5 h-3.5" /> AI Phân tích</>
               )}
             </button>
-            <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
+            <button onClick={onClose} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -1469,7 +1408,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
         {/* Content */}
         <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
           {error && (
-            <div className="rounded-lg border border-red-800 bg-red-900/20 p-3 mb-3">
+            <div className="glass-card border-l-4 border-red-500 bg-red-500/5 p-4 mb-3">
               <p className="text-sm text-red-400">{error}</p>
             </div>
           )}
@@ -1573,7 +1512,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-zinc-800">
+                        <tr className="border-b border-white/5">
                           <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chỉ tiêu</th>
                           {companyExtra.ratios.map(r => (
                             <th key={r.year} className="px-2 py-1 text-right text-zinc-500 font-normal">{r.year}</th>
@@ -1600,7 +1539,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                           { label: 'Cổ tức', key: 'dividend' as const },
                           { label: 'CCC (ngày)', key: 'ccc' as const },
                         ].map(({ label, key }) => (
-                          <tr key={key} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                          <tr key={key} className="border-b border-white/5/30 hover:bg-white/5/20">
                             <td className="px-2 py-1 text-zinc-400">{label}</td>
                             {companyExtra.ratios.map(r => (
                               <td key={r.year} className="px-2 py-1 text-right font-mono text-zinc-300">{r[key]}</td>
@@ -1621,7 +1560,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                     <div className="mb-3">
                       <div className="flex flex-wrap gap-2 px-2 mb-2">
                         {companyExtra.ownership.map((o, i) => (
-                          <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/60 border border-zinc-700/50">
+                          <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-md glass-inset">
                             <span className="text-[11px] text-zinc-400">{o.ownerType}</span>
                             <span className="text-[11px] font-mono font-bold text-zinc-200">{o.ownershipPct.toFixed(1)}%</span>
                           </div>
@@ -1641,7 +1580,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                       <div className="px-2 pb-1 text-[11px] text-zinc-500 font-medium">Cổ đông lớn ({companyExtra.shareholders.length})</div>
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="border-b border-zinc-800">
+                          <tr className="border-b border-white/5">
                             <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
                             <th className="px-2 py-1 text-right text-zinc-500 font-normal">Số CP</th>
                             <th className="px-2 py-1 text-right text-zinc-500 font-normal">Tỷ lệ</th>
@@ -1650,7 +1589,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                         </thead>
                         <tbody>
                           {companyExtra.shareholders.map((s, i) => (
-                            <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                            <tr key={i} className="border-b border-white/5/30 hover:bg-white/5/20">
                               <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
                               <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.sharesOwned}</td>
                               <td className="px-2 py-1 text-right font-mono text-amber-400 font-bold">{s.ownershipPct}</td>
@@ -1670,7 +1609,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-zinc-800">
+                        <tr className="border-b border-white/5">
                           <th className="px-2 py-1 text-left text-zinc-500 font-normal">Tên</th>
                           <th className="px-2 py-1 text-right text-zinc-500 font-normal">Vốn</th>
                           <th className="px-2 py-1 text-right text-zinc-500 font-normal">Sở hữu</th>
@@ -1679,7 +1618,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                       </thead>
                       <tbody>
                         {companyExtra.subsidiaries.map((s, i) => (
-                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                          <tr key={i} className="border-b border-white/5/30 hover:bg-white/5/20">
                             <td className="px-2 py-1 text-zinc-300 max-w-[250px] truncate" title={s.name}>{s.name}</td>
                             <td className="px-2 py-1 text-right font-mono text-zinc-300">{s.charterCapital}</td>
                             <td className="px-2 py-1 text-right font-mono text-blue-400 font-bold">{s.ownershipPct}</td>
@@ -1698,7 +1637,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-zinc-800">
+                        <tr className="border-b border-white/5">
                           <th className="px-2 py-1 text-left text-zinc-500 font-normal">Ngày</th>
                           <th className="px-2 py-1 text-left text-zinc-500 font-normal">Chức vụ</th>
                           <th className="px-2 py-1 text-right text-zinc-500 font-normal">Mua</th>
@@ -1710,7 +1649,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                       </thead>
                       <tbody>
                         {companyExtra.insiderTrades.map((t, i) => (
-                          <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                          <tr key={i} className="border-b border-white/5/30 hover:bg-white/5/20">
                             <td className="px-2 py-1 text-zinc-400 whitespace-nowrap">{t.dateAction}</td>
                             <td className="px-2 py-1 text-zinc-300 max-w-[120px] truncate" title={t.position}>{t.position}</td>
                             <td className="px-2 py-1 text-right font-mono text-green-400">{t.buyVol}</td>
@@ -1731,7 +1670,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
                 <DataSection title={`Tin tức công ty (${companyExtra.news.length})`}>
                   <div className="space-y-2 px-1">
                     {companyExtra.news.map((n, i) => (
-                      <div key={i} className="flex items-start gap-2 py-1 border-b border-zinc-800/30">
+                      <div key={i} className="flex items-start gap-2 py-1 border-b border-white/5/30">
                         <span className="text-[10px] text-zinc-600 whitespace-nowrap mt-0.5">{n.publicDate}</span>
                         <div className="flex-1 min-w-0">
                           {n.sourceLink ? (
@@ -1750,7 +1689,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
 
           {/* AI Analysis */}
           {analysis && (
-            <div className="mt-3 pt-3 border-t border-zinc-800">
+            <div className="mt-3 pt-3 border-t border-white/5">
               <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-amber-400">
                 <Sparkles className="w-4 h-4" />
                 AI Phân tích
@@ -1773,7 +1712,7 @@ function StockAIModal({ stock, stockType, regime, onClose, companyNameMap = {}, 
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-600 text-center">
+        <div className="px-5 py-3 border-t border-white/5 text-[10px] text-zinc-600 text-center">
           Dữ liệu tài chính từ vnstock — Phân tích bởi Claude AI — Chỉ mang tính tham khảo
         </div>
       </div>
@@ -1795,14 +1734,14 @@ function TOTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: TOStoc
   };
 
   if (stocks.length === 0) {
-    return <div className="py-4 text-center text-zinc-500 text-sm">Không tìm thấy mã nào</div>;
+    return <div className="py-6 text-center text-zinc-500 text-sm font-semibold">Khong tim thay ma nao</div>;
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto glass-inset">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-zinc-800">
+          <tr className="border-b border-white/5">
             <SortHeader label="Ticker" sortKey="symbol" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
             <SortHeader label="Price" sortKey="price" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
             <SortHeader label="%" sortKey="changePct" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
@@ -1818,23 +1757,23 @@ function TOTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: TOStoc
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
-              <td className="px-2 py-1.5">
-                <span className="font-bold text-zinc-100">{s.symbol}</span>
+            <tr key={s.symbol} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
+              <td className="px-2 py-2">
+                <span className="font-extrabold text-zinc-100">{s.symbol}</span>
                 {companyNameMap[s.symbol] && (
                   <span className="ml-1.5 text-[10px] text-zinc-500">{companyNameMap[s.symbol]}</span>
                 )}
               </td>
-              <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
-              <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
-              <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
-              <td className="px-2 py-1.5"><CellBadge value={s.state} colorMap={STATE_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.tpaths} colorMap={TPATH_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.mtf} colorMap={MTF_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.qtier} colorMap={QTIER_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.miph} colorMap={MIPH_COLORS} /></td>
-              <td className="px-2 py-1.5"><MIBar value={s.mi} /></td>
-              <td className="px-2 py-1.5 font-mono text-xs font-bold text-amber-400">{s.rank}</td>
+              <td className="px-2 py-2 font-mono text-xs text-zinc-300 font-bold">{s.price.toLocaleString()}</td>
+              <td className="px-2 py-2"><PctCell value={s.changePct} /></td>
+              <td className="px-2 py-2 font-mono text-xs text-zinc-400">{s.gtgd}</td>
+              <td className="px-2 py-2"><CellBadge value={s.state} colorMap={STATE_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.tpaths} colorMap={TPATH_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.mtf} colorMap={MTF_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.qtier} colorMap={QTIER_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.miph} colorMap={MIPH_COLORS} /></td>
+              <td className="px-2 py-2"><MIBar value={s.mi} /></td>
+              <td className="px-2 py-2 font-mono text-xs font-extrabold text-amber-400">{s.rank}</td>
             </tr>
           ))}
         </tbody>
@@ -1861,10 +1800,10 @@ function RSTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: RSStoc
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto glass-inset">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-zinc-800">
+          <tr className="border-b border-white/5">
             <SortHeader label="Ticker" sortKey="symbol" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
             <SortHeader label="Price" sortKey="price" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
             <SortHeader label="%Chg" sortKey="changePct" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
@@ -1878,25 +1817,25 @@ function RSTable({ stocks, onStockClick, companyNameMap = {} }: { stocks: RSStoc
         </thead>
         <tbody>
           {sorted.map((s) => (
-            <tr key={s.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
-              <td className="px-2 py-1.5">
-                <span className="font-bold text-zinc-100">{s.symbol}</span>
+            <tr key={s.symbol} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer" onClick={() => onStockClick?.(s)}>
+              <td className="px-2 py-2">
+                <span className="font-extrabold text-zinc-100">{s.symbol}</span>
                 {companyNameMap[s.symbol] && (
                   <span className="ml-1.5 text-[10px] text-zinc-500">{companyNameMap[s.symbol]}</span>
                 )}
               </td>
-              <td className="px-2 py-1.5 font-mono text-xs text-zinc-300">{s.price.toLocaleString()}</td>
-              <td className="px-2 py-1.5"><PctCell value={s.changePct} /></td>
-              <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">{s.gtgd}</td>
-              <td className="px-2 py-1.5"><CellBadge value={s.rsState} colorMap={RS_STATE_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.vector} colorMap={VECTOR_COLORS} /></td>
-              <td className="px-2 py-1.5"><CellBadge value={s.bucket} colorMap={BUCKET_COLORS} /></td>
-              <td className="px-2 py-1.5">
-                <span className={`font-mono text-xs font-bold ${s.rsPct > 0 ? 'text-green-400' : s.rsPct < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
+              <td className="px-2 py-2 font-mono text-xs text-zinc-300 font-bold">{s.price.toLocaleString()}</td>
+              <td className="px-2 py-2"><PctCell value={s.changePct} /></td>
+              <td className="px-2 py-2 font-mono text-xs text-zinc-400">{s.gtgd}</td>
+              <td className="px-2 py-2"><CellBadge value={s.rsState} colorMap={RS_STATE_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.vector} colorMap={VECTOR_COLORS} /></td>
+              <td className="px-2 py-2"><CellBadge value={s.bucket} colorMap={BUCKET_COLORS} /></td>
+              <td className="px-2 py-2">
+                <span className={`font-mono text-xs font-extrabold ${s.rsPct > 0 ? 'text-green-400' : s.rsPct < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
                   {s.rsPct > 0 ? '+' : ''}{s.rsPct.toFixed(1)}%
                 </span>
               </td>
-              <td className="px-2 py-1.5">
+              <td className="px-2 py-2">
                 <MIBar value={s.score} />
               </td>
             </tr>
@@ -1940,37 +1879,37 @@ function TierSection({ name, description, count, color, defaultOpen, children, t
   const explanation = tierKey ? (TIER_EXPLANATIONS[tierKey] || RS_CAT_EXPLANATIONS[tierKey]) : undefined;
 
   return (
-    <div className={`rounded-lg border border-zinc-800 overflow-hidden ${color} border-l-4`}>
-      <div className="flex items-center justify-between px-4 py-3 hover:bg-zinc-800/30 transition-colors">
+    <div className={`glass-card overflow-hidden ${color} border-l-4 animate-fade-in-up`}>
+      <div className="flex items-center justify-between px-5 py-3.5 hover:bg-white/5 transition-colors">
         <button
           onClick={() => setOpen(!open)}
           className="flex items-center gap-3 flex-1 text-left"
         >
           {open ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />}
-          <span className="font-bold text-sm text-zinc-100">{name}</span>
+          <span className="font-extrabold text-sm text-zinc-100">{name}</span>
           <span className="text-xs text-zinc-500">{description}</span>
         </button>
         <div className="flex items-center gap-2">
           {explanation && (
             <button
               onClick={(e) => { e.stopPropagation(); setShowExpl(s => !s); }}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${showExpl ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'}`}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${showExpl ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-600 hover:text-zinc-400 hover:bg-white/5'}`}
             >
               ?
             </button>
           )}
-          <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 text-xs font-mono">
+          <Badge variant="secondary" className="glass-inset text-zinc-200 text-xs font-mono font-bold">
             {count}
           </Badge>
         </div>
       </div>
       {showExpl && explanation && (
-        <div className="mx-4 mb-2 px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/50 text-xs leading-relaxed text-zinc-400">
+        <div className="mx-4 mb-2 px-3 py-2 glass-inset text-xs leading-relaxed text-zinc-400">
           {explanation}
         </div>
       )}
       {open && (
-        <div className="px-2 pb-2">
+        <div className="px-3 pb-3">
           {children}
         </div>
       )}
@@ -1984,14 +1923,14 @@ function StatCard({ label, value, color, hint }: { label: string; value: number 
   const [showHint, setShowHint] = useState(false);
   return (
     <div
-      className={`flex flex-col items-center p-3 rounded-lg bg-zinc-900 border border-zinc-800 ${hint ? 'cursor-pointer hover:bg-zinc-800/60' : ''} transition-colors`}
+      className={`flex flex-col items-center p-4 glass-card glass-card-hover ${hint ? 'cursor-pointer' : ''}`}
       onClick={() => hint && setShowHint(h => !h)}
     >
-      <span className="text-[11px] text-zinc-500 uppercase tracking-wider flex items-center gap-1">
+      <span className="text-[11px] text-zinc-500 uppercase tracking-wider font-extrabold flex items-center gap-1">
         {label}
-        {hint && <span className="text-zinc-700 text-[9px]">?</span>}
+        {hint && <span className="text-zinc-600 text-[9px]">?</span>}
       </span>
-      <span className={`text-xl font-bold font-mono ${color || 'text-zinc-100'}`}>{value}</span>
+      <span className={`text-2xl font-extrabold font-mono ${color || 'text-zinc-100'}`}>{value}</span>
       {showHint && hint && (
         <p className="mt-1.5 text-[10px] leading-snug text-zinc-500 text-center">{hint}</p>
       )}
@@ -2039,7 +1978,7 @@ function RegimeScoreBar({ score, label }: { score: number; label?: string }) {
     <div className="space-y-1">
       {label && <span className="text-[10px] text-zinc-500 uppercase tracking-wider">{label}</span>}
       <div className="flex items-center gap-2">
-        <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden relative">
+        <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden relative">
           {/* Center marker */}
           <div className="absolute left-1/2 top-0 bottom-0 w-px bg-zinc-600 z-10" />
           <div
@@ -2123,7 +2062,7 @@ function RegimeBanner({ regime, allocation, scoreMultiplier, regimeTextColor }: 
   const [showExpl, setShowExpl] = useState(false);
   const expl = REGIME_EXPLANATION.values[regime];
   return (
-    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
+    <div className="glass-card p-5">
       <div className="flex items-center justify-between">
         <button className="text-left" onClick={() => setShowExpl(s => !s)}>
           <span className={`text-3xl font-black ${regimeTextColor}`}>{regime}</span>
@@ -2135,7 +2074,7 @@ function RegimeBanner({ regime, allocation, scoreMultiplier, regimeTextColor }: 
         </div>
       </div>
       {showExpl && expl && (
-        <div className="mt-3 px-3 py-2 rounded-lg bg-zinc-800/50 border border-zinc-700/40 text-xs leading-relaxed text-zinc-400">
+        <div className="mt-3 px-3 py-2 rounded-lg glass-inset text-xs leading-relaxed text-zinc-400">
           <span className={`font-bold ${regimeTextColor}`}>{regime}</span>: {expl}
         </div>
       )}
@@ -2149,14 +2088,14 @@ function SectionTitle({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="mb-3">
       <button
-        className="flex items-center gap-2 text-lg font-bold text-zinc-100 hover:text-amber-400 transition-colors"
+        className="flex items-center gap-2 text-lg font-extrabold text-gradient-blue hover:opacity-80 transition-opacity"
         onClick={() => setShow(s => !s)}
       >
         {title}
         <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors ${show ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-600 hover:text-zinc-400'}`}>?</span>
       </button>
       {show && (
-        <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 bg-zinc-800/40 rounded-lg px-3 py-2 border border-zinc-700/40">
+        <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 glass-inset px-3 py-2">
           {hint}
         </p>
       )}
@@ -2193,11 +2132,11 @@ function MarketRegimePanel({ regime, distribution }: {
       <RegimeBanner regime={regime.regime} allocation={regime.allocation} scoreMultiplier={scoreMultiplier} regimeTextColor={regimeTextColor} />
 
       {/* Section 2: Current Regime Box */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+      <div className="glass-card p-5">
         <div className="flex items-start justify-between mb-4">
           <div>
             <div className="text-xs text-zinc-500 uppercase mb-2">CURRENT REGIME</div>
-            <div className="text-3xl font-black text-zinc-100">{regime.regime}</div>
+            <div className="text-3xl font-black text-gradient-blue">{regime.regime}</div>
           </div>
           <div className="text-right">
             <div className="text-xs text-zinc-500 uppercase mb-2">ALLOCATION</div>
@@ -2205,7 +2144,7 @@ function MarketRegimePanel({ regime, distribution }: {
           </div>
         </div>
         
-        <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 mb-3">
+        <div className="glass-inset p-3 mb-3">
           <div className="flex items-center gap-2 text-sm">
             <span className="text-zinc-400">PREVIOUS:</span>
             <span className="font-bold text-zinc-100">{regime.regime}</span>
@@ -2216,7 +2155,7 @@ function MarketRegimePanel({ regime, distribution }: {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-white/10 text-zinc-300'}`}>
             {regime.layer4Output.badge}
           </span>
           <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500 text-white">
@@ -2225,14 +2164,14 @@ function MarketRegimePanel({ regime, distribution }: {
           <span className="px-2 py-1 rounded text-xs font-bold bg-red-500 text-white">
             ×{scoreMultiplier.toFixed(2)}
           </span>
-          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+          <span className={`px-2 py-1 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-white/10 text-zinc-300'}`}>
             {regime.layer3Breadth.badge}
           </span>
         </div>
       </div>
 
       {/* Section 3: Action Guide */}
-      <div className="rounded-lg border-l-4 border-amber-500 bg-amber-500/10 p-4">
+      <div className="glass-card border-l-4 border-amber-500 bg-amber-500/10 p-5">
         <h4 className="font-bold text-sm text-zinc-100 mb-3">{actionGuide.title}</h4>
         <div className="space-y-1">
           {actionGuide.bullets.map((bullet, i) => (
@@ -2249,15 +2188,15 @@ function MarketRegimePanel({ regime, distribution }: {
         />
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Card 1 - LAYER 1 */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="glass-card p-5">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 1</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer1Ceiling.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer1Ceiling.badge] || 'bg-white/10 text-zinc-300'}`}>
                 {regime.layer1Ceiling.badge}
               </span>
             </div>
             <div className="text-xs text-zinc-500 mb-2">VNINDEX TO (Ceiling)</div>
-            <div className="text-xl font-black text-zinc-100 mb-3">{regime.layer1Ceiling.status}</div>
+            <div className="text-xl font-extrabold text-zinc-100 mb-3">{regime.layer1Ceiling.status}</div>
             <div className="space-y-1 text-xs">
               <div className="flex items-center gap-2">
                 <span className="text-zinc-400">Broken:</span>
@@ -2271,15 +2210,15 @@ function MarketRegimePanel({ regime, distribution }: {
           </div>
 
           {/* Card 2 - LAYER 2 */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="glass-card p-5">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 2</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer2Components.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer2Components.badge] || 'bg-white/10 text-zinc-300'}`}>
                 {regime.layer2Components.badge}
               </span>
             </div>
             <div className="text-xs text-zinc-500 mb-2">Components (Rotation)</div>
-            <div className="text-xl font-black text-zinc-100 mb-3">{regime.layer2Components.status}</div>
+            <div className="text-xl font-extrabold text-zinc-100 mb-3">{regime.layer2Components.status}</div>
             <div className="space-y-1 text-xs">
               <div className="text-zinc-300">VN30: {regime.layer2Components.vn30Status} (dMI: {regime.layer2Components.vn30dMI >= 0 ? '+' : ''}{regime.layer2Components.vn30dMI.toFixed(0)})</div>
               <div className="text-zinc-300">VNMID: {regime.layer2Components.vnmidStatus} (dMI: {regime.layer2Components.vnmiddMI >= 0 ? '+' : ''}{regime.layer2Components.vnmiddMI.toFixed(0)})</div>
@@ -2288,15 +2227,15 @@ function MarketRegimePanel({ regime, distribution }: {
           </div>
 
           {/* Card 3 - LAYER 3 */}
-          <div className={`rounded-lg border p-4 ${regime.layer3Breadth.badge === 'ALL_WEAK' ? 'border-red-500 bg-zinc-950' : 'border-zinc-800 bg-zinc-950'}`}>
+          <div className={`glass-card p-5 ${regime.layer3Breadth.badge === 'ALL_WEAK' ? 'border-red-500/50 animate-glow' : ''}`}>
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 3</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer3Breadth.badge] || 'bg-white/10 text-zinc-300'}`}>
                 {regime.layer3Breadth.badge}
               </span>
             </div>
             <div className="text-xs text-zinc-500 mb-2">Breadth V2 (Quadrant)</div>
-            <div className="text-xl font-black text-zinc-100 mb-3">AllStock {regime.layer3Breadth.allStockQuadrant}</div>
+            <div className="text-xl font-extrabold text-zinc-100 mb-3">AllStock {regime.layer3Breadth.allStockQuadrant}</div>
             <div className="space-y-1 text-xs">
               <div className="text-zinc-300">VN30: {regime.layer3Breadth.vn30Breadth.quadrant} {regime.layer3Breadth.vn30Breadth.aboveEMA50Pct.toFixed(0)}% (s {regime.layer3Breadth.vn30Breadth.slope5d >= 0 ? '+' : ''}{regime.layer3Breadth.vn30Breadth.slope5d.toFixed(1)})</div>
               <div className="text-zinc-300">VNMID: {regime.layer3Breadth.vnmidBreadth.quadrant} {regime.layer3Breadth.vnmidBreadth.aboveEMA50Pct.toFixed(0)}% (s {regime.layer3Breadth.vnmidBreadth.slope5d >= 0 ? '+' : ''}{regime.layer3Breadth.vnmidBreadth.slope5d.toFixed(1)})</div>
@@ -2306,15 +2245,15 @@ function MarketRegimePanel({ regime, distribution }: {
           </div>
 
           {/* Card 4 - LAYER 4 */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="glass-card p-5">
             <div className="flex items-start justify-between mb-2">
               <span className="text-xs font-bold text-zinc-500 uppercase">LAYER 4</span>
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-zinc-700 text-zinc-300'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${REGIME_BADGE_COLORS[regime.layer4Output.badge] || 'bg-white/10 text-zinc-300'}`}>
                 {regime.layer4Output.badge}
               </span>
             </div>
             <div className="text-xs text-zinc-500 mb-2">Regime Output</div>
-            <div className="text-xl font-black text-zinc-100 mb-3">{regime.regime}</div>
+            <div className="text-xl font-extrabold text-zinc-100 mb-3">{regime.regime}</div>
             <div className="space-y-1 text-xs">
               <div className="text-zinc-300">Base: <span className="font-bold">{regime.layer4Output.base}</span> → Ceiling: <span className="font-bold">{regime.layer4Output.ceilingStatus}</span></div>
               <div className="text-zinc-300">Dir: <span className="font-bold">{regime.layer4Output.direction}</span> | Mode: <span className="font-bold">{regime.layer4Output.mode}</span></div>
@@ -2336,7 +2275,7 @@ function MarketRegimePanel({ regime, distribution }: {
             const changePct = index.changePct || regime.indexLayer?.changePct || 0;
             
             return (
-              <div key={index.symbol} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+              <div key={index.symbol} className="glass-card p-5">
                 <div className="flex items-start justify-between mb-2">
                   <span className="text-sm font-bold text-zinc-100">{index.symbol}</span>
                   <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500 text-white">
@@ -2388,7 +2327,7 @@ function MarketRegimePanel({ regime, distribution }: {
             const quadrantLabel = quadrant === 'Q1' ? 'Bull' : quadrant === 'Q2' ? 'Weak Bull' : quadrant === 'Q3' ? 'Bear' : 'Weak Bear';
             
             return (
-              <div key={item.name} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+              <div key={item.name} className="glass-card p-5">
                 <div className="text-sm font-bold text-zinc-100 mb-2">{item.name}</div>
                 <div className="mb-3">
                   <span className={`text-lg font-black ${quadrant === 'Q3' ? 'text-red-500' : quadrant === 'Q1' ? 'text-green-500' : 'text-amber-500'}`}>
@@ -2396,7 +2335,7 @@ function MarketRegimePanel({ regime, distribution }: {
                   </span>
                 </div>
                 <div className="mb-3">
-                  <div className="h-3 rounded-full bg-zinc-800 overflow-hidden">
+                  <div className="h-3 rounded-full bg-white/10 overflow-hidden">
                     <div 
                       className="h-full bg-green-500 transition-all"
                       style={{ width: `${aboveEMA50}%` }}
@@ -2427,7 +2366,7 @@ function MarketRegimePanel({ regime, distribution }: {
         />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* RS VECTOR */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="glass-card p-5">
             <h4 className="text-sm font-bold text-zinc-200 mb-3">RS VECTOR ({rsTotal} STOCKS)</h4>
             <div className="space-y-2">
               <div className="flex h-8 rounded overflow-hidden">
@@ -2483,7 +2422,7 @@ function MarketRegimePanel({ regime, distribution }: {
           </div>
 
           {/* QUALITYTIER */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="glass-card p-5">
             <h4 className="text-sm font-bold text-zinc-200 mb-3">QUALITYTIER ({totalStocks} STOCKS)</h4>
             <div className="space-y-2">
               <div className="flex h-8 rounded overflow-hidden">
@@ -2543,7 +2482,7 @@ function AnalysisLoading() {
         {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-16 rounded-lg" />)}
       </div>
       {[1, 2, 3].map(i => (
-        <div key={i} className="rounded-lg border border-zinc-800 p-4 space-y-3">
+        <div key={i} className="glass-card p-5 space-y-3">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-32 w-full" />
         </div>
@@ -2567,10 +2506,10 @@ function SimpleMarkdown({ text }: { text: string }) {
     <div className="space-y-0.5">
       {text.split('\n').map((line, i) => {
         if (line.startsWith('## ')) {
-          return <h3 key={i} className="text-base font-bold text-zinc-100 mt-5 mb-2 border-b border-zinc-800 pb-1">{formatInline(line.slice(3))}</h3>;
+          return <h3 key={i} className="text-base font-extrabold text-gradient-blue mt-5 mb-2 border-b border-white/5 pb-1">{formatInline(line.slice(3))}</h3>;
         }
         if (line.startsWith('### ')) {
-          return <h4 key={i} className="text-sm font-bold text-amber-400 mt-3 mb-1">{formatInline(line.slice(4))}</h4>;
+          return <h4 key={i} className="text-sm font-extrabold text-amber-400 mt-3 mb-1">{formatInline(line.slice(4))}</h4>;
         }
         if (line.startsWith('- ') || line.startsWith('• ')) {
           return <p key={i} className="text-sm text-zinc-300 pl-4 py-0.5">{formatInline('• ' + line.slice(2))}</p>;
@@ -2614,16 +2553,13 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
   const [isLoading, setIsLoading] = useState(false);
   const [analyzedAt, setAnalyzedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [geminiKey, setGeminiKey] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // Load API keys from localStorage on mount
+  // Load API key from localStorage on mount
   useEffect(() => {
-    const ak = localStorage.getItem('anthropic_api_key');
-    if (ak) setAnthropicKey(ak);
-    const gk = localStorage.getItem('gemini_api_key');
-    if (gk) setGeminiKey(gk);
+    const saved = localStorage.getItem('anthropic_api_key');
+    if (saved) setApiKey(saved);
   }, []);
 
   const generateSummary = useCallback(() => {
@@ -2691,13 +2627,71 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     setRecommendation('');
 
     try {
+      if (!apiKey) {
+        setShowKeyInput(true);
+        throw new Error('Vui lòng nhập Anthropic API Key để sử dụng tính năng này.');
+      }
+
       const summary = generateSummary();
 
-      await streamAI(
-        AI_SYSTEM_PROMPT,
-        `Hãy phân tích dữ liệu dashboard sau và đưa ra khuyến nghị đầu tư chi tiết:\n\n${summary}`,
-        (t) => setRecommendation(t),
-      );
+      // Call Claude API directly from browser (GitHub Pages = static, no server)
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          stream: true,
+          system: AI_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: `Hãy phân tích dữ liệu dashboard sau và đưa ra khuyến nghị đầu tư chi tiết:\n\n${summary}`,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Claude API error ${response.status}: ${errText.slice(0, 300)}`);
+      }
+
+      // Parse SSE stream from Anthropic API
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                text += event.delta.text;
+                setRecommendation(text);
+              }
+            } catch {
+              // Ignore JSON parse errors for incomplete chunks
+            }
+          }
+        }
+      }
 
       setAnalyzedAt(new Date().toLocaleString('vi-VN'));
     } catch (err: unknown) {
@@ -2706,16 +2700,16 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
     } finally {
       setIsLoading(false);
     }
-  }, [generateSummary]);
+  }, [generateSummary, apiKey]);
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+          <h3 className="text-lg font-extrabold text-gradient-blue flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-amber-400" />
-            Khuyến nghị AI
+            Khuyen nghi AI
           </h3>
           <p className="text-xs text-zinc-500">Claude AI phân tích toàn bộ dashboard và đưa ra khuyến nghị đầu tư</p>
         </div>
@@ -2724,7 +2718,7 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
           disabled={isLoading}
           size="sm"
           variant="outline"
-          className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+          className="gap-2 glass-inset border-0 text-zinc-300 hover:scale-105 transition-transform font-bold"
         >
           {isLoading ? (
             <>
@@ -2742,73 +2736,57 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
 
       {/* API Key Input */}
       {showKeyInput && (
-        <div className="rounded-lg border border-amber-800/50 bg-amber-900/10 p-4 space-y-3">
-          <p className="text-xs text-zinc-400">Không nhập key = dùng <span className="text-green-400 font-medium">Gemini 2.0 Flash miễn phí</span> (nếu có env key). Nhập key để chọn AI provider:</p>
-          <div className="space-y-2">
-            <div className="flex gap-2 items-center">
-              <span className="text-[10px] text-blue-400 w-16 shrink-0">Gemini</span>
-              <input
-                type="password"
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-                placeholder="AIza... (miễn phí tại ai.google.dev)"
-                className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-            <div className="flex gap-2 items-center">
-              <span className="text-[10px] text-amber-400 w-16 shrink-0">Anthropic</span>
-              <input
-                type="password"
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-                placeholder="sk-ant-... (trả phí, chất lượng cao)"
-                className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-              />
-            </div>
+        <div className="glass-card border-l-4 border-amber-500 bg-amber-500/5 p-5 space-y-2">
+          <p className="text-xs text-amber-400">Nhập Anthropic API Key (lưu trong trình duyệt, không gửi đi đâu ngoài Anthropic API):</p>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-ant-api03-..."
+              className="flex-1 rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-amber-500"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
+              onClick={() => {
+                if (apiKey.trim()) {
+                  localStorage.setItem('anthropic_api_key', apiKey.trim());
+                  setShowKeyInput(false);
+                  setError(null);
+                }
+              }}
+            >
+              Lưu
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
-            onClick={() => {
-              if (anthropicKey.trim()) localStorage.setItem('anthropic_api_key', anthropicKey.trim());
-              else localStorage.removeItem('anthropic_api_key');
-              if (geminiKey.trim()) localStorage.setItem('gemini_api_key', geminiKey.trim());
-              else localStorage.removeItem('gemini_api_key');
-              setShowKeyInput(false);
-              setError(null);
-            }}
-          >
-            Lưu
-          </Button>
         </div>
       )}
 
-      {/* Active provider indicator */}
-      {!showKeyInput && (
+      {/* Saved key indicator + change button */}
+      {apiKey && !showKeyInput && (
         <div className="flex items-center gap-2 text-xs text-zinc-500">
-          {(() => {
-            const p = getAIProvider();
-            if (p.provider === 'anthropic') return <span className="text-amber-400">AI: Claude Sonnet (Anthropic) ****{p.apiKey.slice(-6)}</span>;
-            if (p.apiKey) return <span className="text-blue-400">AI: Gemini 2.0 Flash (miễn phí)</span>;
-            return <span className="text-zinc-500">AI: Chưa có API key</span>;
-          })()}
-          <button className="text-amber-500 hover:text-amber-400 underline" onClick={() => setShowKeyInput(true)}>
-            Cài đặt
+          <span>API Key: ****{apiKey.slice(-6)}</span>
+          <button
+            className="text-amber-500 hover:text-amber-400 underline"
+            onClick={() => setShowKeyInput(true)}
+          >
+            Đổi key
           </button>
         </div>
       )}
 
       {/* Error */}
       {error && (
-        <div className="rounded-lg border border-red-800 bg-red-900/20 p-3">
+        <div className="glass-card border-l-4 border-red-500 bg-red-500/5 p-4">
           <p className="text-sm text-red-400">{error}</p>
         </div>
       )}
 
       {/* Result */}
       {recommendation ? (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <div className="glass-card p-5">
           {analyzedAt && (
             <div className="flex items-center gap-1 mb-4 text-xs text-zinc-600">
               <Clock className="w-3 h-3" />
@@ -2824,7 +2802,7 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
           )}
         </div>
       ) : !isLoading ? (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-10 text-center">
+        <div className="glass-card p-10 text-center">
           <Sparkles className="w-10 h-10 text-amber-500 mx-auto mb-4" />
           <p className="text-sm text-zinc-400 max-w-md mx-auto">
             Nhấn <strong className="text-zinc-200">&quot;Phân tích bằng AI&quot;</strong> để Claude phân tích toàn bộ dữ liệu dashboard
@@ -2832,7 +2810,7 @@ function AIRecommendationTab({ data }: { data: AnalysisResult }) {
           </p>
         </div>
       ) : (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-8 text-center">
+        <div className="glass-card p-8 text-center">
           <RefreshCw className="w-8 h-8 text-amber-500 mx-auto mb-3 animate-spin" />
           <p className="text-sm text-zinc-400">Claude đang phân tích {data.totalStocks} mã cổ phiếu...</p>
         </div>
@@ -2880,6 +2858,8 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
   const [recommendation, setRecommendation] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -2892,6 +2872,8 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       setTotalCapital(Number(cap));
       setCapitalInput(Number(cap).toLocaleString('vi-VN'));
     }
+    const key = localStorage.getItem('anthropic_api_key');
+    if (key) setApiKey(key);
   }, []);
 
   // Save holdings to localStorage
@@ -3008,6 +2990,11 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       setError('Vui lòng thêm ít nhất 1 mã vào danh mục.');
       return;
     }
+    if (!apiKey) {
+      setShowKeyInput(true);
+      setError('Vui lòng nhập Anthropic API Key.');
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -3040,17 +3027,59 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       summary += `\n--- BỐI CẢNH THỊ TRƯỜNG ---\n`;
       summary += `Regime: ${regime.regime} | Score: ${regime.score} | Allocation: ${regime.allocation}\n`;
 
-      await streamAI(
-        PORTFOLIO_AI_PROMPT,
-        `Phân tích danh mục đầu tư sau và đưa ra khuyến nghị:\n\n${summary}`,
-        (t) => setRecommendation(t),
-      );
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          stream: true,
+          system: PORTFOLIO_AI_PROMPT,
+          messages: [{ role: 'user', content: `Phân tích danh mục đầu tư sau và đưa ra khuyến nghị:\n\n${summary}` }],
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Claude API error ${response.status}: ${errText.slice(0, 300)}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                text += event.delta.text;
+                setRecommendation(text);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Lỗi không xác định');
     } finally {
       setIsLoading(false);
     }
-  }, [holdings, totalCapital, portfolioStats, data.regime]);
+  }, [holdings, apiKey, totalCapital, portfolioStats, data.regime]);
 
   const fmtVND = (n: number) => n.toLocaleString('vi-VN');
 
@@ -3059,16 +3088,16 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+          <h3 className="text-lg font-extrabold text-gradient-blue flex items-center gap-2">
             <Briefcase className="w-5 h-5 text-violet-400" />
-            Danh mục đầu tư
+            Danh muc dau tu
           </h3>
           <p className="text-xs text-zinc-500">Quản lý danh mục, tính lãi/lỗ realtime, AI khuyến nghị</p>
         </div>
       </div>
 
       {/* Total Capital */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 mb-4">
+      <div className="glass-card p-4 mb-4">
         <label className="text-xs text-zinc-400 mb-1 block">Tổng vốn (VNĐ)</label>
         <div className="flex gap-2">
           <input
@@ -3082,26 +3111,26 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               localStorage.setItem(PORTFOLIO_CAPITAL_KEY, String(num));
             }}
             placeholder="VD: 500,000,000"
-            className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="flex-1 rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-violet-500"
           />
         </div>
       </div>
 
       {/* Add Transaction Form */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+      <div className="glass-card p-4 space-y-3">
         <p className="text-xs text-zinc-400 font-semibold">Thêm giao dịch</p>
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           {/* BUY / SELL toggle */}
-          <div className="flex rounded-md border border-zinc-700 overflow-hidden">
+          <div className="flex rounded-md border border-white/10 overflow-hidden">
             <button
               onClick={() => setNewType('BUY')}
-              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'BUY' ? 'bg-green-600 text-white' : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'}`}
+              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'BUY' ? 'bg-green-600 text-white' : 'bg-white/5 text-zinc-500 hover:text-zinc-300'}`}
             >
               MUA
             </button>
             <button
               onClick={() => setNewType('SELL')}
-              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'SELL' ? 'bg-red-600 text-white' : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'}`}
+              className={`flex-1 py-1.5 text-xs font-bold transition-colors ${newType === 'SELL' ? 'bg-red-600 text-white' : 'bg-white/5 text-zinc-500 hover:text-zinc-300'}`}
             >
               BÁN
             </button>
@@ -3111,7 +3140,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
             value={newSymbol}
             onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
             placeholder="Mã (VD: FPT)"
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-violet-500"
           />
           <input
             type="text"
@@ -3121,7 +3150,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               setNewPrice(raw);
             }}
             placeholder="Giá (VD: 28.8)"
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-violet-500"
           />
           <input
             type="text"
@@ -3131,13 +3160,13 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               setNewQuantity(raw);
             }}
             placeholder="Số lượng"
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-violet-500"
           />
           <input
             type="date"
             value={newDate}
             onChange={(e) => setNewDate(e.target.value)}
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-violet-500"
           />
           <Button
             size="sm"
@@ -3155,15 +3184,15 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
       {holdings.length > 0 && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+            <div className="glass-card p-3 text-center">
               <p className="text-xs text-zinc-500">Tổng đầu tư</p>
               <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalInvested)}</p>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+            <div className="glass-card p-3 text-center">
               <p className="text-xs text-zinc-500">Giá trị hiện tại</p>
               <p className="text-sm font-bold text-zinc-200">{fmtVND(portfolioStats.totalMarketValue)}</p>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+            <div className="glass-card p-3 text-center">
               <p className="text-xs text-zinc-500">Lãi/Lỗ chưa chốt</p>
               <p className={`text-sm font-bold ${portfolioStats.totalUnrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                 {portfolioStats.totalUnrealizedPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalUnrealizedPnl)}
@@ -3171,7 +3200,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               </p>
             </div>
             {portfolioStats.totalRealizedPnl !== 0 && (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <div className="glass-card p-3 text-center">
                 <p className="text-xs text-zinc-500">Lãi/Lỗ đã chốt</p>
                 <p className={`text-sm font-bold ${portfolioStats.totalRealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {portfolioStats.totalRealizedPnl >= 0 ? '+' : ''}{fmtVND(portfolioStats.totalRealizedPnl)}
@@ -3187,7 +3216,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
                 </p>
               </div>
             ) : totalCapital > 0 ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <div className="glass-card p-3 text-center">
                 <p className="text-xs text-zinc-500">Cash còn lại</p>
                 <p className="text-sm font-bold text-amber-400">
                   {fmtVND(portfolioStats.cashRemaining)}
@@ -3198,10 +3227,10 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
           </div>
 
           {/* Positions Table (aggregated) */}
-          <div className="rounded-lg border border-zinc-800 overflow-x-auto">
+          <div className="glass-card overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-zinc-900 text-zinc-400 border-b border-zinc-800">
+                <tr className="bg-white/5 text-zinc-400 border-b border-white/5">
                   <th className="text-left p-2 font-medium">Mã</th>
                   <th className="text-right p-2 font-medium">Giá TB</th>
                   <th className="text-right p-2 font-medium">SL còn</th>
@@ -3214,7 +3243,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               </thead>
               <tbody>
                 {portfolioStats.positions.filter(p => p.netQty > 0).map((p) => (
-                  <tr key={p.symbol} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
+                  <tr key={p.symbol} className="border-b border-white/5/50 hover:bg-white/3">
                     <td className="p-2 font-bold text-zinc-200">
                       {p.symbol}
                       {p.state && <span className="ml-1 text-[10px] text-zinc-500">{p.state}</span>}
@@ -3242,11 +3271,11 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
           </div>
 
           {/* Transaction History */}
-          <div className="rounded-lg border border-zinc-800 overflow-x-auto">
-            <p className="text-xs text-zinc-400 font-semibold p-2 bg-zinc-900 border-b border-zinc-800">Lịch sử giao dịch</p>
+          <div className="glass-card overflow-x-auto">
+            <p className="text-xs text-zinc-400 font-semibold p-2 bg-white/5 border-b border-white/5">Lịch sử giao dịch</p>
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-zinc-900/50 text-zinc-500 border-b border-zinc-800">
+                <tr className="bg-white/3 text-zinc-500 border-b border-white/5">
                   <th className="text-left p-2 font-medium">Loại</th>
                   <th className="text-left p-2 font-medium">Mã</th>
                   <th className="text-right p-2 font-medium">Giá</th>
@@ -3258,7 +3287,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               </thead>
               <tbody>
                 {holdings.map((h) => (
-                  <tr key={h.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50">
+                  <tr key={h.id} className="border-b border-white/5/50 hover:bg-white/3">
                     <td className="p-2">
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${h.type === 'BUY' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
                         {h.type === 'BUY' ? 'MUA' : 'BÁN'}
@@ -3292,7 +3321,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
                 disabled={isLoading}
                 size="sm"
                 variant="outline"
-                className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                className="gap-2 glass-inset border-0 text-zinc-300 hover:scale-105 transition-transform font-bold"
               >
                 {isLoading ? (
                   <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Đang phân tích...</>
@@ -3302,24 +3331,44 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
               </Button>
             </div>
 
-            {/* AI Provider indicator */}
-            <div className="text-xs text-zinc-500">
-              {(() => {
-                const p = getAIProvider();
-                if (p.provider === 'anthropic') return <span className="text-amber-400">AI: Claude (Anthropic)</span>;
-                if (p.apiKey) return <span className="text-blue-400">AI: Gemini Flash (miễn phí)</span>;
-                return <span className="text-red-400">Chưa có API key — cài đặt ở tab AI Khuyến nghị</span>;
-              })()}
-            </div>
+            {/* API Key Input */}
+            {showKeyInput && (
+              <div className="glass-card border-l-4 border-amber-500 bg-amber-500/5 p-5 space-y-2">
+                <p className="text-xs text-amber-400">Nhập Anthropic API Key:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-ant-api03-..."
+                    className="flex-1 rounded-md glass-inset px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:ring-amber-500"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-700 text-amber-400 hover:bg-amber-900/30"
+                    onClick={() => {
+                      if (apiKey.trim()) {
+                        localStorage.setItem('anthropic_api_key', apiKey.trim());
+                        setShowKeyInput(false);
+                        setError(null);
+                      }
+                    }}
+                  >
+                    Lưu
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {error && (
-              <div className="rounded-lg border border-red-800 bg-red-900/20 p-3">
+              <div className="glass-card border-l-4 border-red-500 bg-red-500/5 p-4">
                 <p className="text-sm text-red-400">{error}</p>
               </div>
             )}
 
             {recommendation && (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+              <div className="glass-card p-5">
                 <SimpleMarkdown text={recommendation} />
                 {isLoading && (
                   <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
@@ -3335,7 +3384,7 @@ function PortfolioTab({ data }: { data: AnalysisResult }) {
 
       {/* Empty state */}
       {holdings.length === 0 && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-10 text-center">
+        <div className="glass-card p-10 text-center">
           <Briefcase className="w-10 h-10 text-violet-500 mx-auto mb-4" />
           <p className="text-sm text-zinc-400 max-w-md mx-auto">
             Nhập <strong className="text-zinc-200">Tổng vốn</strong>, sau đó thêm các mã cổ phiếu bạn đang nắm giữ.
@@ -3368,14 +3417,14 @@ function ScreenerTab({ toStocks, rsStocks, onStockClick, companyNameMap = {} }: 
   return (
     <div className="space-y-4">
       {/* Filter bar */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+      <div className="glass-card p-3">
         <div className="flex flex-wrap gap-3">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-zinc-500">State:</span>
             <select
               value={filterState}
               onChange={(e) => setFilterState(e.target.value as State | 'ALL')}
-              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+              className="glass-inset text-zinc-200 text-xs px-2.5 py-1.5"
             >
               <option value="ALL">ALL</option>
               {(['BREAKOUT', 'CONFIRM', 'RETEST', 'TREND', 'BASE', 'WEAK'] as State[]).map(v => (
@@ -3388,7 +3437,7 @@ function ScreenerTab({ toStocks, rsStocks, onStockClick, companyNameMap = {} }: 
             <select
               value={filterQTier}
               onChange={(e) => setFilterQTier(e.target.value as QTier | 'ALL')}
-              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+              className="glass-inset text-zinc-200 text-xs px-2.5 py-1.5"
             >
               <option value="ALL">ALL</option>
               {(['PRIME', 'VALID', 'WATCH', 'AVOID'] as QTier[]).map(v => (
@@ -3401,7 +3450,7 @@ function ScreenerTab({ toStocks, rsStocks, onStockClick, companyNameMap = {} }: 
             <select
               value={filterTPath}
               onChange={(e) => setFilterTPath(e.target.value as TrendPath | 'ALL')}
-              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+              className="glass-inset text-zinc-200 text-xs px-2.5 py-1.5"
             >
               <option value="ALL">ALL</option>
               {(['S_MAJOR', 'MAJOR', 'MINOR', 'WEAK'] as TrendPath[]).map(v => (
@@ -3414,7 +3463,7 @@ function ScreenerTab({ toStocks, rsStocks, onStockClick, companyNameMap = {} }: 
             <select
               value={filterMTF}
               onChange={(e) => setFilterMTF(e.target.value as MTFSync | 'ALL')}
-              className="bg-zinc-800 text-zinc-200 text-xs rounded px-2 py-1 border border-zinc-700"
+              className="glass-inset text-zinc-200 text-xs px-2.5 py-1.5"
             >
               <option value="ALL">ALL</option>
               {(['SYNC', 'PARTIAL', 'WEAK'] as MTFSync[]).map(v => (
@@ -3462,18 +3511,18 @@ export function StockAnalysis() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-fade-in-up">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-100">
+          <h1 className="text-3xl font-extrabold tracking-tight text-gradient-blue">
             Market Dashboard V3
           </h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-zinc-500 font-semibold mt-0.5">
             TO Best Setups + RS Best Setups | All Stocks
           </p>
         </div>
         <div className="flex items-center gap-3">
           {data && (
-            <span className="text-xs text-zinc-600 flex items-center gap-1">
+            <span className="text-xs text-zinc-500 flex items-center gap-1.5 glass-inset px-3 py-1.5">
               <Clock className="w-3 h-3" />
               {new Date(data.generatedAt).toLocaleString('vi-VN')}
             </span>
@@ -3483,7 +3532,7 @@ export function StockAnalysis() {
             disabled={isFetching}
             size="sm"
             variant="outline"
-            className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+            className="gap-2 rounded-2xl glass-inset border-0 text-zinc-300 hover:scale-105 transition-transform font-bold"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
             {isFetching ? 'Đang tải...' : 'Cập nhật'}
@@ -3495,47 +3544,47 @@ export function StockAnalysis() {
         <AnalysisLoading />
       ) : (
         <Tabs defaultValue="to" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-5 h-auto p-1 bg-zinc-900 border border-zinc-800">
+          <TabsList className="grid w-full grid-cols-5 h-auto p-1.5 glass-card animate-fade-in-up">
             <TabsTrigger
               value="to"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-green-400"
+              className="flex items-center gap-2 py-2.5 rounded-2xl data-[state=active]:bg-green-500/15 data-[state=active]:text-green-400 data-[state=active]:shadow-lg data-[state=active]:shadow-green-500/10 transition-all font-extrabold"
             >
               <Activity className="w-4 h-4" />
-              <span className="font-bold text-sm">TO</span>
-              <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
+              <span className="text-sm">TO</span>
+              <Badge variant="secondary" className="glass-inset text-zinc-300 text-xs font-mono ml-1">
                 {data.toStocks.length}
               </Badge>
             </TabsTrigger>
             <TabsTrigger
               value="rs"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-blue-400"
+              className="flex items-center gap-2 py-2.5 rounded-2xl data-[state=active]:bg-blue-500/15 data-[state=active]:text-blue-400 data-[state=active]:shadow-lg data-[state=active]:shadow-blue-500/10 transition-all font-extrabold"
             >
               <Zap className="w-4 h-4" />
-              <span className="font-bold text-sm">RS</span>
-              <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 text-xs font-mono ml-1">
+              <span className="text-sm">RS</span>
+              <Badge variant="secondary" className="glass-inset text-zinc-300 text-xs font-mono ml-1">
                 {data.rsStocks.length}
               </Badge>
             </TabsTrigger>
             <TabsTrigger
               value="screener"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
+              className="flex items-center gap-2 py-2.5 rounded-2xl data-[state=active]:bg-amber-500/15 data-[state=active]:text-amber-400 data-[state=active]:shadow-lg data-[state=active]:shadow-amber-500/10 transition-all font-extrabold"
             >
               <BarChart3 className="w-4 h-4" />
-              <span className="font-bold text-sm">Screener</span>
+              <span className="text-sm">Screener</span>
             </TabsTrigger>
             <TabsTrigger
               value="portfolio"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-violet-400"
+              className="flex items-center gap-2 py-2.5 rounded-2xl data-[state=active]:bg-violet-500/15 data-[state=active]:text-violet-400 data-[state=active]:shadow-lg data-[state=active]:shadow-violet-500/10 transition-all font-extrabold"
             >
               <Briefcase className="w-4 h-4" />
-              <span className="font-bold text-sm">Portfolio</span>
+              <span className="text-sm">Portfolio</span>
             </TabsTrigger>
             <TabsTrigger
               value="ai"
-              className="flex items-center gap-2 py-2.5 data-[state=active]:bg-zinc-800 data-[state=active]:text-amber-400"
+              className="flex items-center gap-2 py-2.5 rounded-2xl data-[state=active]:bg-amber-500/15 data-[state=active]:text-amber-400 data-[state=active]:shadow-lg data-[state=active]:shadow-amber-500/10 transition-all font-extrabold"
             >
               <Sparkles className="w-4 h-4" />
-              <span className="font-bold text-sm">AI</span>
+              <span className="text-sm">AI</span>
             </TabsTrigger>
           </TabsList>
 
@@ -3706,14 +3755,14 @@ function Guide() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-lg border border-zinc-800 overflow-hidden mt-6">
+    <div className="glass-card overflow-hidden mt-6 animate-fade-in-up">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-zinc-900/50 hover:bg-zinc-800/30 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-white/5 transition-colors"
       >
         <div className="flex items-center gap-2">
           {open ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />}
-          <span className="font-bold text-sm text-zinc-300">Huong dan su dung (Guide)</span>
+          <span className="font-extrabold text-sm text-zinc-300">Huong dan su dung (Guide)</span>
         </div>
       </button>
       {open && (
@@ -3726,7 +3775,7 @@ function Guide() {
               </div>
             ))}
           </div>
-          <div className="mt-4 pt-3 border-t border-zinc-800 space-y-1.5">
+          <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
             <p className="text-xs text-zinc-500">
               <span className="text-zinc-400 font-semibold">Cach dung:</span> Tab TO Best Setups de tim diem entry ky thuat tot nhat. Tab RS Best Setups de tim co phieu manh hon thi truong.
             </p>
