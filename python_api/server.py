@@ -1,23 +1,44 @@
 """
 VN Sniper - Python Backend API
 FastAPI server to expose vnstock data for Next.js frontend
+Tự động chạy screening vào 11:45 và 15:15 (UTC+7)
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import vnstock as vs
 import pandas as pd
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 import os
 
+from scheduler import create_scheduler, get_latest_result, get_schedule_info, run_screening
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("vn-sniper")
+
+# Scheduler lifecycle
+@asynccontextmanager
+async def lifespan(app):
+    # Startup: khởi động scheduler
+    scheduler = create_scheduler()
+    scheduler.start()
+    logger.info("Auto-scheduler đã khởi động (11:45 & 15:15 UTC+7)")
+    yield
+    # Shutdown: dừng scheduler
+    scheduler.shutdown()
+    logger.info("Auto-scheduler đã dừng")
+
 # Khởi tạo FastAPI
 app = FastAPI(
     title="VN Sniper API",
-    description="API dữ liệu chứng khoán Việt Nam từ vnstock",
-    version="1.0.0"
+    description="API dữ liệu chứng khoán Việt Nam từ vnstock - Tự động screening 11:45 & 15:15 (UTC+7)",
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
 # CORS để cho phép Next.js gọi API
@@ -80,6 +101,9 @@ async def root():
             "/stocks/finance/{symbol} - Chỉ số tài chính",
             "/stocks/company/{symbol} - Thông tin công ty",
             "/stocks/search - Tìm kiếm cổ phiếu",
+            "/scheduler/status - Trạng thái auto-scheduler",
+            "/scheduler/latest - Kết quả screening mới nhất",
+            "/scheduler/run-now - Chạy screening ngay (POST)",
         ]
     }
 
@@ -362,6 +386,39 @@ async def get_bulk_ratios(
             results.append({"symbol": symbol, "error": str(e)})
     
     return {"data": results, "count": len(results)}
+
+# ============================================
+# SCHEDULER ENDPOINTS
+# ============================================
+
+@app.get("/scheduler/status")
+async def scheduler_status():
+    """Xem trạng thái và lịch chạy tự động"""
+    return get_schedule_info()
+
+@app.get("/scheduler/latest")
+async def scheduler_latest():
+    """Lấy kết quả screening mới nhất từ auto-scheduler"""
+    result = get_latest_result()
+    if result is None:
+        return {
+            "message": "Chưa có kết quả screening nào. Scheduler sẽ chạy vào 11:45 hoặc 15:15 (UTC+7).",
+            "schedule": get_schedule_info()
+        }
+    return result
+
+@app.post("/scheduler/run-now")
+async def scheduler_run_now():
+    """Chạy screening ngay lập tức (manual trigger)"""
+    try:
+        run_screening()
+        result = get_latest_result()
+        return {
+            "message": "Screening hoàn tất!",
+            "result": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi chạy screening: {str(e)}")
 
 @app.get("/health")
 async def health_check():
