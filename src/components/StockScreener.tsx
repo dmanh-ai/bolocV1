@@ -122,7 +122,7 @@ export function StockScreener() {
         };
       });
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
 
   const filteredStocks = useMemo(() => {

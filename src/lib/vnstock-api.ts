@@ -35,7 +35,7 @@ function num(val: string | undefined): number | undefined {
 // --------------- In-Memory Cache ---------------
 
 const cache = new Map<string, { data: Record<string, string>[]; ts: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
 async function fetchCSV(path: string): Promise<Record<string, string>[]> {
   const url = `${BASE_URL}/${path}`;
@@ -49,7 +49,9 @@ async function fetchCSV(path: string): Promise<Record<string, string>[]> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url);
+      // Add cache-busting parameter to bypass GitHub CDN cache
+      const fetchUrl = `${url}?t=${Math.floor(Date.now() / 60000)}`;
+      const res = await fetch(fetchUrl);
       if (res.status === 404) {
         throw new Error(`Not found: ${path}`);
       }
